@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from "react";
 
 export default function NuevoPagoPage() {
   const [facturas, setFacturas] = useState([]);
+  const [pagos, setPagos] = useState({});
   const [montoEfectivo, setMontoEfectivo] = useState(0);
   const [montoTransferencia, setMontoTransferencia] = useState(0);
   const [chkEfectivo, setChkEfectivo] = useState(false);
@@ -48,7 +49,10 @@ export default function NuevoPagoPage() {
 
     fetch(`http://localhost:8080/api/facturas/pendientes?clienteId=${cliente.id}`)
       .then((res) => res.json())
-      .then((data) => setFacturas(Array.isArray(data) ? data : []))
+      .then((data) => {
+        setFacturas(Array.isArray(data) ? data : []);
+        setPagos({});
+      })
       .catch((err) => console.error("Error cargando facturas pendientes:", err));
   };
 
@@ -92,7 +96,7 @@ export default function NuevoPagoPage() {
                     <label className="form-label fw-bold mb-1">Total a Pagar</label>
                   </div>
                   <div className="col">
-                    <input type="text" className="form-control form-control-sm text-center bg-black text-info fw-bold" value="10000000" disabled readOnly />
+                    <input type="text" className="form-control form-control-sm text-center bg-black text-info fw-bold" value={Object.values(pagos).reduce((s, v) => s + Number(v || 0), 0).toLocaleString("es-PY")} disabled readOnly />
                   </div>
                 </div>
               </div>
@@ -179,11 +183,12 @@ export default function NuevoPagoPage() {
                           <th scope="col">Fecha</th>
                           <th scope="col">Total</th>
                           <th scope="col">Saldo</th>
+                          <th scope="col">Pago total</th>
                         </tr>
                       </thead>
                       <tbody>
                         {facturas.length === 0 ? (
-                          <tr><td colSpan="5">Sin facturas pendientes</td></tr>
+                          <tr><td colSpan="6">Sin facturas pendientes</td></tr>
                         ) : (
                           facturas.map((factura) => (
                             <tr key={factura.id}>
@@ -192,6 +197,16 @@ export default function NuevoPagoPage() {
                               <td>{factura.fechaEmision}</td>
                               <td>{factura.total.toLocaleString("es-PY")}</td>
                               <td>{factura.saldo.toLocaleString("es-PY")}</td>
+                              <td>
+                                <input
+                                  type="number"
+                                  className="form-control form-control-sm text-end"
+                                  value={pagos[factura.id] || ""}
+                                  onChange={(e) => setPagos({ ...pagos, [factura.id]: e.target.value })}
+                                  onFocus={(e) => e.target.select()}
+                                  placeholder="0"
+                                />
+                              </td>
                             </tr>
                           ))
                         )}
