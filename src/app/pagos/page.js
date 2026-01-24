@@ -40,7 +40,7 @@ export default function PagosPage() {
   };
 
   const columnas = [
-    { header: "Nº de pago", accessor: "npago" },
+    { header: "Nº de pago", accessor: "nPago" },
     { header: "Pago total", accessor: (p) => `${p.totalPagado.toLocaleString("es-PY")} Gs` },
     { header: "Fecha de creación", accessor: (p) => new Date(p.creadoEn).toLocaleString("es-PY") },
   ];
