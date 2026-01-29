@@ -1,14 +1,28 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
+import { useSearchParams } from "next/navigation";
 
 export default function NuevoPagoPage() {
+  const searchParams = useSearchParams();
+  const facturaIdFromUrl = searchParams.get("facturaId"); // /pagos/nuevo?facturaId=123
+  const facturaIdFocus = facturaIdFromUrl ? Number(facturaIdFromUrl) : null;
+
   const [facturas, setFacturas] = useState([]);
+
+  // pagos: { [facturaId]: "123.456" (string formateado) }
   const [pagos, setPagos] = useState({});
-  const [montoEfectivo, setMontoEfectivo] = useState(0);
-  const [montoTransferencia, setMontoTransferencia] = useState(0);
+
+  // ✅ selección obligatoria por checkbox: { [facturaId]: true/false }
+  const [seleccionadas, setSeleccionadas] = useState({});
+
+  // ✅ ahora string para permitir separador de miles mientras escribe
+  const [montoEfectivo, setMontoEfectivo] = useState("");
+  const [montoTransferencia, setMontoTransferencia] = useState("");
+
   const [chkEfectivo, setChkEfectivo] = useState(false);
   const [chkTransferencia, setChkTransferencia] = useState(false);
+
   const [banco, setBanco] = useState("");
   const [operacion, setOperacion] = useState("");
 
@@ -23,6 +37,35 @@ export default function NuevoPagoPage() {
 
   const searchTimeout = useRef(null);
 
+  // ========= helpers =========
+  const soloDigitos = (s) => (s || "").toString().replace(/\D/g, "");
+
+  const formatearMilesPY = (digits) => {
+    const d = soloDigitos(digits);
+    if (!d) return "";
+    return d.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  };
+
+  const aNumero = (valorFormateado) => {
+    const d = soloDigitos(valorFormateado);
+    return d ? Number(d) : 0;
+  };
+
+  // ===== Totales calculados (solo facturas seleccionadas) =====
+  const totalAPagar = useMemo(() => {
+    return Object.entries(pagos).reduce((sum, [facturaId, valor]) => {
+      const id = Number(facturaId);
+      if (!seleccionadas[id]) return sum;
+      return sum + aNumero(valor);
+    }, 0);
+  }, [pagos, seleccionadas]);
+
+  // ✅ Vuelto en efectivo: montoEntregado - total
+  const vueltoEfectivo = chkEfectivo ? aNumero(montoEfectivo) - totalAPagar : 0;
+
+  // ✅ "Efectivo devuelto" en transferencia: montoTransferido - total
+  const efectivoDevueltoTransfer = chkTransferencia ? aNumero(montoTransferencia) - totalAPagar : 0;
+
   // ✅ Solo un método a la vez (tu backend acepta 1 solo enum)
   const toggleEfectivo = () => {
     setChkEfectivo((v) => {
@@ -31,7 +74,9 @@ export default function NuevoPagoPage() {
         setChkTransferencia(false);
         setBanco("");
         setOperacion("");
-        setMontoTransferencia(0);
+        setMontoTransferencia("");
+      } else {
+        setMontoEfectivo("");
       }
       return next;
     });
@@ -42,20 +87,86 @@ export default function NuevoPagoPage() {
       const next = !v;
       if (next) {
         setChkEfectivo(false);
-        setMontoEfectivo(0);
+        setMontoEfectivo("");
       } else {
         setBanco("");
         setOperacion("");
-        setMontoTransferencia(0);
+        setMontoTransferencia("");
       }
       return next;
     });
   };
 
+  // ✅ AUTOCARGA: si venimos desde editar factura: /pagos/nuevo?facturaId=123
+  useEffect(() => {
+    const autoCargarDesdeFactura = async () => {
+      if (!facturaIdFromUrl) return;
+
+      try {
+        setLoading(true);
+        setErrorMsg("");
+        setOkMsg("");
+
+        // 1) cargar factura
+        const facRes = await fetch(`http://localhost:8080/api/facturas/${facturaIdFromUrl}`);
+        if (!facRes.ok) throw new Error("No se pudo cargar la factura.");
+        const factura = await facRes.json();
+
+        if (!factura?.clienteId) throw new Error("La factura no tiene clienteId.");
+
+        // 2) cargar cliente
+        const cliRes = await fetch(`http://localhost:8080/api/clientes/${factura.clienteId}`);
+        if (!cliRes.ok) throw new Error("No se pudo cargar el cliente.");
+        const cliente = await cliRes.json();
+
+        setClienteSeleccionado(cliente);
+        setClienteBusqueda(`${cliente.nombre} (${cliente.ruc})`);
+        setClientesSugeridos([]);
+        setIndiceSeleccionado(-1);
+
+        // 3) cargar facturas pendientes del cliente
+        const pendRes = await fetch(
+          `http://localhost:8080/api/facturas/pendientes?clienteId=${cliente.id}`
+        );
+        if (!pendRes.ok) throw new Error("No se pudieron cargar facturas pendientes.");
+        const pendientes = await pendRes.json();
+        const lista = Array.isArray(pendientes) ? pendientes : [];
+
+        setFacturas(lista);
+
+        // ✅ Seleccionar por defecto SOLO la factura actual (checkbox marcado)
+        if (facturaIdFocus) {
+          setSeleccionadas({ [facturaIdFocus]: true });
+        } else {
+          setSeleccionadas({});
+        }
+
+        // ✅ Pago total debe empezar vacío
+        setPagos({});
+      } catch (err) {
+        console.error("AutoCarga error:", err);
+        setErrorMsg(err?.message || "Error cargando datos desde la factura.");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    autoCargarDesdeFactura();
+  }, [facturaIdFromUrl]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Buscar clientes (manual)
   useEffect(() => {
     if (clienteBusqueda.trim() === "") {
       setClientesSugeridos([]);
       setIndiceSeleccionado(-1);
+      return;
+    }
+
+    // evitar búsqueda cuando fue autocompletado
+    if (
+      clienteSeleccionado &&
+      clienteBusqueda.trim() === `${clienteSeleccionado.nombre} (${clienteSeleccionado.ruc})`
+    ) {
       return;
     }
 
@@ -70,7 +181,7 @@ export default function NuevoPagoPage() {
         })
         .catch((err) => console.error("Error buscando clientes:", err));
     }, 300);
-  }, [clienteBusqueda]);
+  }, [clienteBusqueda, clienteSeleccionado]);
 
   const handleClienteSeleccionado = (cliente) => {
     setErrorMsg("");
@@ -82,8 +193,10 @@ export default function NuevoPagoPage() {
     fetch(`http://localhost:8080/api/facturas/pendientes?clienteId=${cliente.id}`)
       .then((res) => res.json())
       .then((data) => {
-        setFacturas(Array.isArray(data) ? data : []);
+        const lista = Array.isArray(data) ? data : [];
+        setFacturas(lista);
         setPagos({});
+        setSeleccionadas({});
       })
       .catch((err) => console.error("Error cargando facturas pendientes:", err));
   };
@@ -102,7 +215,20 @@ export default function NuevoPagoPage() {
     }
   };
 
-  
+  // ✅ Ordenar: arriba la factura actual, luego el resto por id DESC
+  const facturasOrdenadas = useMemo(() => {
+    const arr = Array.isArray(facturas) ? [...facturas] : [];
+    arr.sort((a, b) => Number(b.id) - Number(a.id)); // desc por id
+
+    if (!facturaIdFocus) return arr;
+
+    const idx = arr.findIndex((f) => Number(f.id) === Number(facturaIdFocus));
+    if (idx > 0) {
+      const [foc] = arr.splice(idx, 1);
+      arr.unshift(foc);
+    }
+    return arr;
+  }, [facturas, facturaIdFocus]);
 
   const handleCrearPago = async () => {
     setErrorMsg("");
@@ -113,15 +239,16 @@ export default function NuevoPagoPage() {
       return;
     }
 
+    // ✅ SOLO facturas marcadas por checkbox
     const detalles = Object.entries(pagos)
       .map(([facturaId, montoAplicado]) => ({
         facturaId: Number(facturaId),
-        montoAplicado: Number(montoAplicado),
+        montoAplicado: aNumero(montoAplicado),
       }))
-      .filter((d) => d.facturaId && d.montoAplicado > 0);
+      .filter((d) => d.facturaId && d.montoAplicado > 0 && seleccionadas[d.facturaId]);
 
     if (detalles.length === 0) {
-      setErrorMsg("Cargá un monto en al menos una factura.");
+      setErrorMsg("Marcá la casilla y cargá un monto en al menos una factura.");
       return;
     }
 
@@ -132,7 +259,7 @@ export default function NuevoPagoPage() {
 
     // ✅ validar contra saldo antes de enviar
     for (const d of detalles) {
-      const fac = facturas.find((f) => f.id === d.facturaId);
+      const fac = facturas.find((f) => Number(f.id) === Number(d.facturaId));
       if (!fac) {
         setErrorMsg(`Factura no encontrada en la lista: ID ${d.facturaId}`);
         return;
@@ -148,8 +275,19 @@ export default function NuevoPagoPage() {
       }
     }
 
-    // ✅ tu backend acepta un solo metodo por pago
     const metodo = chkTransferencia ? "TRANSFERENCIA" : "EFECTIVO";
+
+    if (metodo === "EFECTIVO") {
+      const me = aNumero(montoEfectivo);
+      if (me <= 0) {
+        setErrorMsg("Ingresá el monto entregado.");
+        return;
+      }
+      if (me < totalAPagar) {
+        setErrorMsg("El monto entregado no puede ser menor al total a pagar.");
+        return;
+      }
+    }
 
     if (metodo === "TRANSFERENCIA") {
       if (!banco.trim()) {
@@ -160,14 +298,29 @@ export default function NuevoPagoPage() {
         setErrorMsg("Ingresá el N° de operación.");
         return;
       }
+      const mt = aNumero(montoTransferencia);
+      if (mt <= 0) {
+        setErrorMsg("Ingresá el monto transferido.");
+        return;
+      }
+      if (mt < totalAPagar) {
+        setErrorMsg("El monto transferido no puede ser menor al total a pagar.");
+        return;
+      }
     }
 
     const payload = {
       clienteId: clienteSeleccionado.id,
       metodo,
       ...(metodo === "TRANSFERENCIA"
-        ? { banco: banco.trim(), nOperacion: operacion.toString().trim() }
-        : {}),
+        ? {
+            banco: banco.trim(),
+            nOperacion: operacion.toString().trim(),
+            montoTransferido: aNumero(montoTransferencia),
+          }
+        : {
+            montoEntregado: aNumero(montoEfectivo),
+          }),
       detalles,
     };
 
@@ -193,15 +346,18 @@ export default function NuevoPagoPage() {
 
       // reset
       setPagos({});
-      setMontoEfectivo(0);
-      setMontoTransferencia(0);
+      setSeleccionadas({});
+      setMontoEfectivo("");
+      setMontoTransferencia("");
       setChkEfectivo(false);
       setChkTransferencia(false);
       setBanco("");
       setOperacion("");
 
       // refrescar facturas pendientes del cliente
-      const f = await fetch(`http://localhost:8080/api/facturas/pendientes?clienteId=${clienteSeleccionado.id}`);
+      const f = await fetch(
+        `http://localhost:8080/api/facturas/pendientes?clienteId=${clienteSeleccionado.id}`
+      );
       const list = await f.json();
       setFacturas(Array.isArray(list) ? list : []);
     } catch (err) {
@@ -224,6 +380,7 @@ export default function NuevoPagoPage() {
                   {loading ? "Guardando..." : "Crear"}
                 </button>
               </div>
+
               <div className="col-sm-2">
                 <div className="row g-1">
                   <div className="col-auto">
@@ -234,6 +391,7 @@ export default function NuevoPagoPage() {
                   </div>
                 </div>
               </div>
+
               <div className="col-sm-3">
                 <div className="row g-1">
                   <div className="col-auto">
@@ -243,24 +401,15 @@ export default function NuevoPagoPage() {
                     <input
                       type="text"
                       className="form-control form-control-sm text-center bg-black text-info fw-bold"
-                      value={Object.values(pagos).reduce((s, v) => s + Number(v || 0), 0).toLocaleString("es-PY")}
+                      value={totalAPagar.toLocaleString("es-PY")}
                       disabled
                       readOnly
                     />
                   </div>
                 </div>
               </div>
-              <div className="col-sm-3">
-                <div className="row g-1">
-                  <div className="col-auto">
-                    <label className="form-label fw-bold mb-1">Vuelto</label>
-                  </div>
-                  <div className="col">
-                    <input type="text" className="form-control form-control-sm text-center bg-black text-warning fw-bold" value="0" disabled readOnly />
-                  </div>
-                </div>
-              </div>
-              <div className="col-sm-1 text-center">
+
+              <div className="col-sm-2 ms-auto text-center">
                 <button
                   className="btn btn-danger btn-sm fw-bold"
                   type="button"
@@ -268,8 +417,9 @@ export default function NuevoPagoPage() {
                     setErrorMsg("");
                     setOkMsg("");
                     setPagos({});
-                    setMontoEfectivo(0);
-                    setMontoTransferencia(0);
+                    setSeleccionadas({});
+                    setMontoEfectivo("");
+                    setMontoTransferencia("");
                     setChkEfectivo(false);
                     setChkTransferencia(false);
                     setBanco("");
@@ -278,9 +428,6 @@ export default function NuevoPagoPage() {
                 >
                   Eliminar
                 </button>
-              </div>
-              <div className="col-sm-2 text-end">
-                
               </div>
             </div>
 
@@ -323,28 +470,16 @@ export default function NuevoPagoPage() {
                     )}
                   </div>
                 </div>
+
                 <div className="row mb-2">
                   <div className="col-sm-4">
-                    <input
-                      type="text"
-                      className="form-control form-control-sm text-center"
-                      placeholder="RUC"
-                      value={clienteSeleccionado?.ruc || ""}
-                      disabled
-                      readOnly
-                    />
+                    <input type="text" className="form-control form-control-sm text-center" placeholder="RUC" value={clienteSeleccionado?.ruc || ""} disabled readOnly />
                   </div>
                   <div className="col-sm-8">
-                    <input
-                      type="text"
-                      className="form-control form-control-sm text-center"
-                      placeholder="Nombre"
-                      value={clienteSeleccionado?.nombre || ""}
-                      disabled
-                      readOnly
-                    />
+                    <input type="text" className="form-control form-control-sm text-center" placeholder="Nombre" value={clienteSeleccionado?.nombre || ""} disabled readOnly />
                   </div>
                 </div>
+
                 <div className="row">
                   <div className="table-responsive overflow-auto" style={{ height: "300px" }}>
                     <table className="table table-bordered table-hover table-sm align-middle text-center mb-0">
@@ -359,48 +494,80 @@ export default function NuevoPagoPage() {
                         </tr>
                       </thead>
                       <tbody>
-                        {facturas.length === 0 ? (
-                          <tr><td colSpan="6">Sin facturas pendientes</td></tr>
+                        {facturasOrdenadas.length === 0 ? (
+                          <tr>
+                            <td colSpan="6">Sin facturas pendientes</td>
+                          </tr>
                         ) : (
-                          facturas.map((factura) => (
-                            <tr key={factura.id}>
-                              <td><input type="checkbox" className="form-check-input" /></td>
-                              <td>{factura.numeroFactura || factura.id}</td>
-                              <td>{factura.fechaEmision}</td>
-                              <td>{Number(factura.total || 0).toLocaleString("es-PY")}</td>
-                              <td>{Number(factura.saldo || 0).toLocaleString("es-PY")}</td>
-                              <td>
-                                <input
-                                  type="number"
-                                  className="form-control form-control-sm text-end"
-                                  value={pagos[factura.id] ?? ""}
-                                  onChange={(e) => {
-                                    const raw = e.target.value;
+                          facturasOrdenadas.map((factura) => {
+                            const id = Number(factura.id);
+                            const saldo = Number(factura.saldo || 0);
 
-                                    // permitir vacío para borrar
-                                    if (raw === "") {
-                                      const copy = { ...pagos };
-                                      delete copy[factura.id];
-                                      setPagos(copy);
-                                      return;
-                                    }
+                            return (
+                              <tr key={factura.id}>
+                                <td>
+                                  <input
+                                    type="checkbox"
+                                    className="form-check-input"
+                                    checked={!!seleccionadas[id]}
+                                    onChange={(e) => {
+                                      const checked = e.target.checked;
+                                      setSeleccionadas((prev) => ({ ...prev, [id]: checked }));
 
-                                    const value = Number(raw);
-                                    const saldo = Number(factura.saldo || 0);
+                                      if (!checked) {
+                                        setPagos((prev) => {
+                                          const copy = { ...prev };
+                                          delete copy[id];
+                                          return copy;
+                                        });
+                                      }
+                                    }}
+                                  />
+                                </td>
 
-                                    if (Number.isNaN(value) || value < 0) return;
+                                <td>{factura.numeroFactura || factura.id}</td>
+                                <td>{factura.fechaEmision}</td>
+                                <td>{Number(factura.total || 0).toLocaleString("es-PY")}</td>
+                                <td>{saldo.toLocaleString("es-PY")}</td>
 
-                                    // tope: no puede superar saldo
-                                    const finalValue = value > saldo ? saldo : value;
+                                <td>
+                                  <input
+                                    type="text"
+                                    inputMode="numeric"
+                                    className="form-control form-control-sm text-end"
+                                    value={pagos[id] ?? ""}
+                                    disabled={!seleccionadas[id]}
+                                    onFocus={(e) => {
+                                      setPagos((prev) => ({ ...prev, [id]: "" }));
+                                      setTimeout(() => e.target.select(), 0);
+                                    }}
+                                    onChange={(e) => {
+                                      const raw = e.target.value;
 
-                                    setPagos({ ...pagos, [factura.id]: finalValue });
-                                  }}
-                                  onFocus={(e) => e.target.select()}
-                                  placeholder="0"
-                                />
-                              </td>
-                            </tr>
-                          ))
+                                      if (raw.trim() === "") {
+                                        setPagos((prev) => {
+                                          const copy = { ...prev };
+                                          delete copy[id];
+                                          return copy;
+                                        });
+                                        return;
+                                      }
+
+                                      const digits = soloDigitos(raw);
+                                      const formatted = formatearMilesPY(digits);
+
+                                      const num = aNumero(formatted);
+                                      const finalNum = num > saldo ? saldo : num;
+                                      const finalFormatted = finalNum > 0 ? formatearMilesPY(String(finalNum)) : "";
+
+                                      setPagos((prev) => ({ ...prev, [id]: finalFormatted }));
+                                    }}
+                                    placeholder="0"
+                                  />
+                                </td>
+                              </tr>
+                            );
+                          })
                         )}
                       </tbody>
                     </table>
@@ -410,44 +577,88 @@ export default function NuevoPagoPage() {
 
               {/* MÉTODOS DE PAGO */}
               <div className="col-sm-4">
-                <div className="row mb-4">
+                <div className="row mb-1">
                   <div className="col-sm-4">
-                    <div className="form-check mb-2">
+                    <div className="form-check">
                       <input className="form-check-input" type="checkbox" id="chkEfectivo" checked={chkEfectivo} onChange={toggleEfectivo} />
-                      <label className="form-check-label fw-bold" htmlFor="chkEfectivo">Efectivo</label>
+                      <label className="form-check-label fw-bold" htmlFor="chkEfectivo">
+                        Efectivo
+                      </label>
                     </div>
                   </div>
-                  <div className="col-sm-8">
+                </div>
+
+                <div className="row mb-1">
+                  <div className="col-sm-6">
+                    <label className="form-label fw-bold">Monto entregado</label>
+                  </div>
+                  <div className="col-sm-6">
                     <input
-                      type="number"
+                      type="text"
+                      inputMode="numeric"
                       className="form-control form-control-sm text-end"
                       id="montoEfectivo"
-                      placeholder="10000000"
+                      placeholder="0"
                       disabled={!chkEfectivo}
                       value={montoEfectivo}
-                      onChange={(e) => setMontoEfectivo(e.target.value)}
+                      onFocus={(e) => {
+                        setMontoEfectivo("");
+                        setTimeout(() => e.target.select(), 0);
+                      }}
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        if (raw.trim() === "") {
+                          setMontoEfectivo("");
+                          return;
+                        }
+                        const digits = soloDigitos(raw);
+                        const formatted = formatearMilesPY(digits);
+                        setMontoEfectivo(formatted);
+                      }}
                     />
                   </div>
                 </div>
-                <div className="row mb-2">
+
+                <div className="row mb-5">
+                  <div className="col-sm-6">
+                    <label className="form-label fw-bold">Vuelto</label>
+                  </div>
+                  <div className="col-sm-6">
+                    <input
+                      type="text"
+                      className="form-control form-control-sm text-center bg-black text-warning fw-bold"
+                      value={Math.max(0, vueltoEfectivo).toLocaleString("es-PY")}
+                      disabled
+                      readOnly
+                    />
+                  </div>
+                </div>
+
+                <div className="row mb-1">
                   <div className="col-sm-12">
                     <div className="form-check">
                       <input className="form-check-input" type="checkbox" id="chkTransferencia" checked={chkTransferencia} onChange={toggleTransferencia} />
-                      <label className="form-check-label fw-bold" htmlFor="chkTransferencia">Transferencia Bancaria</label>
+                      <label className="form-check-label fw-bold" htmlFor="chkTransferencia">
+                        Transferencia Bancaria
+                      </label>
                     </div>
                   </div>
                 </div>
-                <div className="row mb-2">
+
+                <div className="row mb-1">
                   <div className="col-sm-12">
                     <select className="form-select form-select-sm text-center" id="banco" disabled={!chkTransferencia} value={banco} onChange={(e) => setBanco(e.target.value)}>
-                      <option disabled value="">Seleccione banco</option>
-                      <option value="Itau">Itaú</option>
-                      <option value="Ueno">Ueno</option>
-                      <option value="Continental">Continental</option>
+                      <option disabled value="">
+                        Seleccione banco
+                      </option>
+                      <option value="ITAU">Itaú</option>
+                      <option value="UENO">Ueno</option>
+                      <option value="CONTINENTAL">Continental</option>
                     </select>
                   </div>
                 </div>
-                <div className="row mb-2">
+
+                <div className="row mb-1">
                   <div className="col-sm-12">
                     <input
                       type="number"
@@ -460,21 +671,54 @@ export default function NuevoPagoPage() {
                     />
                   </div>
                 </div>
-                <div className="row">
-                  <div className="col-sm-12">
+
+                <div className="row mb-1">
+                  <div className="col-sm-6">
+                    <label className="form-label fw-bold">Monto transferido</label>
+                  </div>
+                  <div className="col-sm-6">
                     <input
-                      type="number"
+                      type="text"
+                      inputMode="numeric"
                       className="form-control form-control-sm text-end"
                       id="montoTransferencia"
-                      placeholder="Monto transferencia"
+                      placeholder="0"
                       disabled={!chkTransferencia}
                       value={montoTransferencia}
-                      onChange={(e) => setMontoTransferencia(e.target.value)}
+                      onFocus={(e) => {
+                        setMontoTransferencia("");
+                        setTimeout(() => e.target.select(), 0);
+                      }}
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        if (raw.trim() === "") {
+                          setMontoTransferencia("");
+                          return;
+                        }
+                        const digits = soloDigitos(raw);
+                        const formatted = formatearMilesPY(digits);
+                        setMontoTransferencia(formatted);
+                      }}
+                    />
+                  </div>
+                </div>
+
+                <div className="row mb-1">
+                  <div className="col-sm-6">
+                    <label className="form-label fw-bold">Efectivo devuelto</label>
+                  </div>
+                  <div className="col-sm-6">
+                    <input
+                      type="text"
+                      className="form-control form-control-sm text-center bg-black text-warning fw-bold"
+                      value={Math.max(0, efectivoDevueltoTransfer).toLocaleString("es-PY")}
+                      disabled
+                      readOnly
                     />
                   </div>
                 </div>
               </div>
-
+              {/* FIN MÉTODOS */}
             </div>
           </div>
         </div>

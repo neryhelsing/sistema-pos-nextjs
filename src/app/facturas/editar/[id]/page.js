@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import axios from "axios";
 import { useParams, useRouter } from "next/navigation";
 
@@ -26,60 +26,89 @@ export default function EditarFacturaPage() {
   const [detalles, setDetalles] = useState([]);
   const [total, setTotal] = useState(0);
   const [saldo, setSaldo] = useState(0);
+  const [montoAplicado, setMontoAplicado] = useState(0); // ✅ NUEVO
   const [detallesOriginales, setDetallesOriginales] = useState("");
   const [facturaOriginal, setFacturaOriginal] = useState(null);
 
+  const [loadingEmitir, setLoadingEmitir] = useState(false);
+
+  // ✅ Helper: formatear fecha dd/MM/yyyy
+  const formatearFecha = (fecha) => {
+  if (!fecha) return "";
+
+  // Si viene como "YYYY-MM-DD" (DATE), no usar Date() (evita el -1 día por timezone)
+  if (typeof fecha === "string" && /^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
+    const [yyyy, mm, dd] = fecha.split("-");
+    return `${dd}/${mm}/${yyyy}`;
+  }
+
+  // Si viene con hora (ISO), ahí sí parseamos normal
+  const d = new Date(fecha);
+  if (isNaN(d.getTime())) return "";
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const yyyy = d.getFullYear();
+  return `${dd}/${mm}/${yyyy}`;
+  };
 
 
+  // ✅ Reutilizable: cargar factura
+  const cargarFactura = useCallback(async () => {
+    if (!id) return;
 
-    // 🔁 Cargar datos existentes
-    useEffect(() => {
-      const cargarFactura = async () => {
-        try {
-          const res = await axios.get(`http://localhost:8080/api/facturas/${id}`);
-          const factura = res.data;
+    try {
+      const res = await axios.get(`http://localhost:8080/api/facturas/${id}`);
+      const factura = res.data;
 
-          setTipoFactura(factura.tipo || "FCC");
-          setFacturaOriginal(factura);
+      setTipoFactura(factura.tipo || "FCC");
+      setFacturaOriginal(factura);
 
-          // 🔄 Obtener datos del cliente
-          const clienteRes = await axios.get(`http://localhost:8080/api/clientes/${factura.clienteId}`);
-          setClienteSeleccionado(clienteRes.data);
+      const toNum = (v) => (v === null || v === undefined ? 0 : Number(v));
 
-          // 🔄 Adaptar productos con detalles completos
-          const adaptados = await Promise.all(
-            factura.detalles.map(async (d) => {
-              const prodRes = await axios.get(`http://localhost:8080/api/productos/${d.productoId}`);
-              const producto = prodRes.data;
+      setTotal(toNum(factura.total));
+      setSaldo(toNum(factura.saldo));
+      setMontoAplicado(toNum(factura.montoAplicado));
 
-              return {
-                id: producto.id,
-                productoId: producto.id,
-                codBarra: producto.codigoBarra,
-                nombre: producto.nombre,
-                cantidad: d.cantidad,
-                precioUnitario: d.precioUnitario,
-                total: d.cantidad * d.precioUnitario,
-              };
-            })
+
+      // 🔄 Obtener datos del cliente
+      const clienteRes = await axios.get(
+        `http://localhost:8080/api/clientes/${factura.clienteId}`
+      );
+      setClienteSeleccionado(clienteRes.data);
+
+      // 🔄 Adaptar productos con detalles completos
+      const adaptados = await Promise.all(
+        (factura.detalles || []).map(async (d) => {
+          const prodRes = await axios.get(
+            `http://localhost:8080/api/productos/${d.productoId}`
           );
+          const producto = prodRes.data;
 
-          setDetalles(adaptados.reverse());
-          setDetallesOriginales(JSON.stringify(adaptados));
-          setSaldo(factura.saldo || factura.total);
-        } catch (err) {
-          console.error("Error al cargar factura:", err);
-          alert("No se pudo cargar la factura. Verifica que el ID sea válido.");
-        }
-      };
+          return {
+            id: producto.id,
+            productoId: producto.id,
+            codBarra: producto.codigoBarra,
+            nombre: producto.nombre,
+            cantidad: d.cantidad,
+            precioUnitario: d.precioUnitario,
+            total: d.cantidad * d.precioUnitario,
+          };
+        })
+      );
 
-      cargarFactura();
-    }, [id]);
+      setDetalles(adaptados.reverse());
+      setDetallesOriginales(JSON.stringify(adaptados));
+      // ✅ saldo ya seteado desde BD arriba
+    } catch (err) {
+      console.error("Error al cargar factura:", err);
+      alert("No se pudo cargar la factura. Verifica que el ID sea válido.");
+    }
+  }, [id]);
 
-
-
-
-
+  // 🔁 Cargar datos existentes
+  useEffect(() => {
+    cargarFactura();
+  }, [cargarFactura]);
 
   // 🔁 Recalcular total
   useEffect(() => {
@@ -174,7 +203,7 @@ export default function EditarFacturaPage() {
     } else {
       const nuevoItem = {
         id: productoSeleccionado.id,
-        productoId: productoSeleccionado.id, // ✅ AGREGADO
+        productoId: productoSeleccionado.id,
         codBarra,
         nombre: productoSeleccionado.nombre,
         cantidad: cantidadNueva,
@@ -194,487 +223,548 @@ export default function EditarFacturaPage() {
     setDetalles(detalles.filter((item) => item.id !== id));
   };
 
-    const handleActualizarFactura = async () => {
-        if (!clienteSeleccionado || detalles.length === 0) {
-        alert("Debes seleccionar un cliente y al menos un producto.");
-        return;
-        }
+  const handleActualizarFactura = async () => {
+    if (!clienteSeleccionado || detalles.length === 0) {
+      alert("Debes seleccionar un cliente y al menos un producto.");
+      return;
+    }
 
-        const actualesSerializados = JSON.stringify(
-        detalles.map((d) => ({
-          productoId: d.productoId,
-          cantidad: d.cantidad,
-          precioUnitario: d.precioUnitario,
-        }))
-        );
+    const actualesSerializados = JSON.stringify(
+      detalles.map((d) => ({
+        productoId: d.productoId,
+        cantidad: d.cantidad,
+        precioUnitario: d.precioUnitario,
+      }))
+    );
 
-        const originales = JSON.parse(detallesOriginales);
+    const originales = JSON.parse(detallesOriginales);
 
-        const productosModificados = actualesSerializados !== JSON.stringify(originales);
-        const clienteCambiado = clienteSeleccionado.id !== facturaOriginal?.clienteId;
-        const tipoCambiado = tipoFactura !== facturaOriginal?.tipo;
+    const productosModificados = actualesSerializados !== JSON.stringify(originales);
+    const clienteCambiado = clienteSeleccionado.id !== facturaOriginal?.clienteId;
+    const tipoCambiado = tipoFactura !== facturaOriginal?.tipo;
 
-        if (!productosModificados && !clienteCambiado && !tipoCambiado) {
-        alert("No se detectaron cambios.");
-        return;
-        }
+    if (!productosModificados && !clienteCambiado && !tipoCambiado) {
+      alert("No se detectaron cambios.");
+      return;
+    }
 
-        const facturaData = {
-        clienteId: clienteSeleccionado.id,
-        tipo: tipoFactura,
-        total: total,
-        fechaEmision: new Date(),
-        detalles: detalles.map((item) => ({
-          productoId: item.productoId,
-          cantidad: item.cantidad,
-          precioUnitario: item.precioUnitario,
-        })),
-        };
-
-        try {
-        await axios.put(`http://localhost:8080/api/facturas/${id}`, facturaData);
-        alert("Factura actualizada correctamente");
-        setDetallesOriginales(actualesSerializados);
-        router.refresh(); // 🔁 Recarga la página para tomar los cambios
-        } catch (error) {
-        console.error("Error al actualizar factura:", error);
-        alert("Ocurrió un error al actualizar la factura.");
-        }
+    const facturaData = {
+      clienteId: clienteSeleccionado.id,
+      tipo: tipoFactura,
+      total: total,
+      fechaEmision: new Date(),
+      detalles: detalles.map((item) => ({
+        productoId: item.productoId,
+        cantidad: item.cantidad,
+        precioUnitario: item.precioUnitario,
+      })),
     };
 
+    try {
+      await axios.put(`http://localhost:8080/api/facturas/${id}`, facturaData);
+      alert("Factura actualizada correctamente");
+      setDetallesOriginales(actualesSerializados);
 
+      // ✅ volver a cargar para reflejar todo
+      await cargarFactura();
+      router.refresh();
+    } catch (error) {
+      console.error("Error al actualizar factura:", error);
+      alert("Ocurrió un error al actualizar la factura.");
+    }
+  };
 
-  // Resto del diseño: REUTILIZA exactamente el JSX del archivo nuevo/page.js
-  // Solo cambia el evento del botón:
-  // <button onClick={handleActualizarFactura}>Actualizar</button>
+  // ✅ emitir a crédito (validación FCC/FCR + bonus EMITIDA)
+  const handleEmitirFactura = async () => {
+    if (facturaOriginal?.estado?.toUpperCase() === "EMITIDA") {
+      alert("Esta factura ya está emitida.");
+      return;
+    }
 
-    return (
-        <div className="container-fluid bg-dark text-white p-2">
+    if (tipoFactura !== "FCR") {
+      alert(
+        "No se puede emitir una factura en estado FCC.\nDebes cambiar a FCR para emitir a crédito."
+      );
+      return;
+    }
 
+    if (!id) {
+      alert("Primero debes crear la factura antes de emitir.");
+      return;
+    }
 
-            {/* 🟩 CINTA DE OPCIONES */}
-            <div className="row mb-2">
-                <div className="col-sm-12">
-                    <div className="border border-success bg-light text-dark p-2 rounded">
-                        <div className="row">
-                            <div className="col-sm-3">
-                                <div className="row g-1">
-                                    <div className="col-sm-3 text-center">
-                                        <button
-                                          className="btn btn-primary btn-sm fw-bold w-100"
-                                          onClick={handleActualizarFactura}
-                                        >
-                                          Update
-                                        </button>
-                                    </div>
+    try {
+      setLoadingEmitir(true);
+      const res = await axios.post(
+        `http://localhost:8080/api/facturas/${id}/emitir-credito`
+      );
 
-                                    <div className="col-sm-3 text-center">
-                                        <button className="btn btn-success btn-sm fw-bold w-100">Emitir</button>
-                                    </div>
+      alert(`Factura emitida a crédito. Nº: ${res.data}`);
 
-                                    <div className="col-sm-3 text-center">
-                                        <button className="btn btn-danger btn-sm fw-bold w-100">Anular</button>
-                                    </div>
+      // ✅ volver a cargar para reflejar estado/numero/fecha
+      await cargarFactura();
+      router.refresh();
+    } catch (error) {
+      console.error("Error al emitir factura:", error);
+      const msg =
+        error?.response?.data ||
+        "Ocurrió un error al emitir la factura. Verifica el estado e intenta nuevamente.";
+      alert(msg);
+    } finally {
+      setLoadingEmitir(false);
+    }
+  };
 
-                                    <div className="col-sm-3 text-center">
-                                      <div className="dropdown">
-                                        <button
-                                          className="btn btn-secondary btn-sm fw-bold dropdown-toggle w-100"
-                                          type="button"
-                                          data-bs-toggle="dropdown"
-                                          aria-expanded="false"
-                                        >
-                                          {tipoFactura}
-                                        </button>
-                                        <ul className="dropdown-menu w-100">
-                                          <li>
-                                            <button
-                                              className="dropdown-item"
-                                              type="button"
-                                              onClick={() => setTipoFactura("FCC")}
-                                            >
-                                              FCC
-                                            </button>
-                                          </li>
-                                          <li>
-                                            <button
-                                              className="dropdown-item"
-                                              type="button"
-                                              onClick={() => setTipoFactura("FCR")}
-                                            >
-                                              FCR
-                                            </button>
-                                          </li>
-                                        </ul>
-                                      </div>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div className="col-sm-2">
-                                <div className="row g-1">
-                                    <div className="col-auto fw-bold">Estado:</div>
-                                    <div className="col-sm-6 fw-bold text-center">
-                                        <input
-                                          type="text"
-                                          className="form-control form-control-sm text-center"
-                                          value="Borrador"
-                                          disabled
-                                          readOnly
-                                        />
-                                    </div>
-                                </div>
-                            </div>
-
-
-                            <div className="col-sm-2">
-                                <div className="row g-1">
-                                    <div className="col-auto fw-bold">Draft:</div>
-                                    <div className="col">
-                                        <input
-                                          type="text"
-                                          className="form-control form-control-sm text-center"
-                                          value="100000"
-                                          disabled
-                                          readOnly
-                                        />
-                                    </div>
-                                </div>
-                            </div>
-
-
-                            <div className="col-sm-3">
-                                <div className="row g-1">
-                                    <div className="col-auto fw-bold">Factura Nº:</div>
-                                    <div className="col">
-                                        <input
-                                          type="text"
-                                          className="form-control form-control-sm text-center"
-                                          value="100000"
-                                          disabled
-                                          readOnly
-                                        />
-                                    </div>
-                                </div>
-                            </div>
-
-
-                            <div className="col-sm-2">
-                                <div className="row g-1">
-                                    <div className="col-auto fw-bold">Emisión:</div>
-                                    <div className="col">
-                                        <input
-                                          type="text"
-                                          className="form-control form-control-sm text-center"
-                                          value="26/04/2025"
-                                          disabled
-                                          readOnly
-                                        />
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-
-
-            {/* 🟩 PRIMERA FILA: CLIENTES + MEDIO DE PAGOS */}
-            <div className="row mb-2">
-                <div className="col-sm-6">
-                    <div className="border border-success bg-light text-dark p-2 rounded">
-
-                        {/* Primera fila: Buscador de cliente */}
-                        <div className="row mb-2 position-relative">
-                          <div className="col-sm-12">
-                            <input
-                              type="text"
-                              className="form-control form-control-sm"
-                              placeholder="Buscar cliente..."
-                              value={clienteQuery}
-                              onChange={(e) => setClienteQuery(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (clientesFiltrados.length === 0) return;
-                                if (e.key === "ArrowDown") {
-                                  e.preventDefault();
-                                  setClienteSeleccionadoIndex((prev) => (prev < clientesFiltrados.length - 1 ? prev + 1 : 0));
-                                } else if (e.key === "ArrowUp") {
-                                  e.preventDefault();
-                                  setClienteSeleccionadoIndex((prev) => (prev > 0 ? prev - 1 : clientesFiltrados.length - 1));
-                                } else if (e.key === "Enter" && clienteSeleccionadoIndex >= 0) {
-                                  handleSeleccionarCliente(clientesFiltrados[clienteSeleccionadoIndex]);
-                                }
-                              }}
-                            />
-                            
-                            {clientesFiltrados.length > 0 && (
-                              <ul className="list-group position-absolute z-3 w-100">
-                                {clientesFiltrados.map((cliente, index) => (
-                                  <li
-                                    key={cliente.id}
-                                    className={`list-group-item list-group-item-action ${index === clienteSeleccionadoIndex ? "active" : ""}`}
-                                    onClick={() => handleSeleccionarCliente(cliente)}
-                                    style={{ cursor: "pointer" }}
-                                  >
-                                    {cliente.ruc} - {cliente.nombre}
-                                  </li>
-                                ))}
-                              </ul>
-                            )}
-                          </div>
-                        </div>
-
-
-                        {/* Segunda fila: RUC y Nombre del Cliente */}
-                        <div className="row g-2">
-                          <div className="col-sm-4">
-                            <input
-                              type="text"
-                              className="form-control form-control-sm text-center"
-                              placeholder="RUC"
-                              value={clienteSeleccionado?.ruc || ""}
-                              disabled
-                              readOnly
-                            />
-                          </div>
-                          <div className="col-sm-8">
-                            <input
-                              type="text"
-                              className="form-control form-control-sm text-center"
-                              placeholder="Nombre del Cliente"
-                              value={clienteSeleccionado?.nombre || ""}
-                              disabled
-                              readOnly
-                            />
-                          </div>
-                        </div>
-                    </div>
-                </div>
-
-
-                <div className="col-sm-6">
-                    <div className="border border-success bg-light text-dark p-2 rounded">
-
-                        {/* Primera fila: Total y Saldo */}
-                        <div className="row mb-2">
-                            {/* Total */}
-                            <div className="col-sm-6">
-                                <div className="row">
-                                    <div className="col-sm-6">
-                                        <label className="form-label fw-bold mb-1">Total:</label>
-                                    </div>
-                                    <div className="col-sm-6">
-                                        <input
-                                          type="text"
-                                          className="form-control form-control-sm text-center bg-black text-info fw-bold"
-                                          value={total.toLocaleString("es-PY")}
-                                          disabled
-                                          readOnly
-                                        />
-                                    </div>
-                                </div>
-                            </div>
-
-                            {/* Saldo */}
-                            <div className="col-sm-6">
-                                <div className="row">
-                                    <div className="col-sm-6">
-                                        <label className="form-label fw-bold mb-1">Saldo:</label>
-                                    </div>
-
-                                    <div className="col-sm-6">
-                                        <input
-                                          type="text"
-                                          className="form-control form-control-sm text-end"
-                                          value={saldo.toLocaleString("es-PY")}
-                                          disabled
-                                          readOnly
-                                        />
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-
-
-
-                        {/* Segunda fila: Importe Aplicado y Botón Pagar */}
-                        <div className="row">
-                            {/* Importe Aplicado */}
-                            <div className="col-sm-6">
-                                <div className="row">
-                                    <div className="col-sm-6">
-                                        <label className="form-label fw-bold mb-1">Pagado:</label>
-                                    </div>
-
-                                    <div className="col-sm-6">
-                                        <input
-                                          type="text"
-                                          className="form-control form-control-sm text-end"
-                                          placeholder="10000000"
-                                          disabled
-                                          readOnly
-                                        />
-                                    </div>
-                                </div>
-                            </div>
-
-                            {/* Botón Pagar */}
-                            <div className="col-sm-6 text-center">
-                            <button type="button" className="btn btn-dark btn-sm">
-                              Pagar
-                            </button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-
-
-
-
-            {/* 🟩 SEGUNDA FILA: productos */}
-            <div className="row mb-2">
-            <div className="col-sm-12">
-              <div className="border border-success bg-light text-dark p-2 rounded">
-                <div className="row align-items-center">
-                  <div className="col-8">
-                    <div className="row mb-3">
-                      <div className="col">
-                        <input
-                          type="text"
-                          className="form-control form-control-sm"
-                          placeholder="Buscar producto por nombre o código barra..."
-                          value={productoQuery}
-                          onChange={(e) => setProductoQuery(e.target.value)} 
-                          ref={productoQueryRef}
-                          onKeyDown={(e) => {
-                            if (productosFiltrados.length === 0) return;
-                            if (e.key === "ArrowDown") {
-                              e.preventDefault();
-                              setProductoIndex((prev) => (prev < productosFiltrados.length - 1 ? prev + 1 : 0));
-                            } else if (e.key === "ArrowUp") {
-                              e.preventDefault();
-                              setProductoIndex((prev) => (prev > 0 ? prev - 1 : productosFiltrados.length - 1));
-                            } else if (e.key === "Enter" && productoIndex >= 0) {
-                              handleSeleccionarProducto(productosFiltrados[productoIndex]);
-                            }
-                          }}
-                        />
-                        {productosFiltrados.length > 0 && (
-                          <ul className="list-group position-absolute z-3 w-100">
-                            {productosFiltrados.map((p, index) => (
-                              <li
-                                key={p.id}
-                                className={`list-group-item list-group-item-action ${index === productoIndex ? "active" : ""}`}
-                                onClick={() => handleSeleccionarProducto(p)}
-                                style={{ cursor: "pointer" }}
-                              >
-                                {p.codigoBarra} - {p.nombre}
-                              </li>
-                            ))}
-                          </ul>
-                        )}
-                      </div>
-                    </div>
-                    <div className="row g-2">
-                      <div className="col-3 text-center fw-bold">COD. BARRA</div>
-                      <div className="col text-center fw-bold">PRODUCTO</div>
-                    </div>
-                    <div className="row g-2">
-                      <div className="col-3">
-                        <input type="text" className="form-control form-control-sm text-center" value={productoSeleccionado?.codigoBarra || ""} disabled readOnly />
-                      </div>
-                      <div className="col">
-                        <input type="text" className="form-control form-control-sm text-center" value={productoSeleccionado?.nombre || ""} disabled readOnly />
-                      </div>
-                    </div>
-                  </div>
-                  <div className="col-2">
-                    <div className="row mb-3">
-                      <div className="col">
-                        <input
-                          type="number"
-                          className="form-control form-control-sm text-center bg-white text-black"
-                          placeholder="Cantidad..."
-                          min="1"
-                          value={cantidad}
-                          onChange={(e) => setCantidad(e.target.value)}
-                          ref={cantidadInputRef}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") {
-                              handleAgregarProducto(); // ✅ Añade directamente al presionar Enter
-                            }
-                          }}
-                        />
-                      </div>
-                    </div>
-                    <div className="row">
-                      <div className="col text-center fw-bold">PRECIO UNIDAD</div>
-                    </div>
-                    <div className="row">
-                      <div className="col">
-                        <input
-                          type="text"
-                          className="form-control form-control-sm text-center"
-                          value={productoSeleccionado?.precio?.toLocaleString("es-PY") || ""}
-                          disabled
-                          readOnly
-                        />
-                      </div>
-                    </div>
-                  </div>
-                  <div className="col-2">
-                    <div className="row">
-                      <div className="col text-center">
-                        <button className="btn btn-warning btn-sm" onClick={handleAgregarProducto}>
-                          Añadir
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-            </div>
-
-            {/* 🟩 TABLA DE PRODUCTOS */}
+  return (
+    <div className="container-fluid bg-dark text-white p-2">
+      {/* 🟩 CINTA DE OPCIONES */}
+      <div className="row mb-2">
+        <div className="col-sm-12">
+          <div className="border border-success bg-light text-dark p-2 rounded">
             <div className="row">
-            <div className="col-sm-12">
-              <div className="border border-success bg-light text-dark p-2 rounded">
-                <div className="table-responsive">
-                  <table className="table table-bordered table-hover table-sm text-center align-middle mb-0">
-                    <thead className="table-success">
-                      <tr>
-                        <th>Nº</th>
-                        <th>COD. BARRA</th>
-                        <th>PRODUCTO</th>
-                        <th>CANT.</th>
-                        <th>PRECIO UNIT.</th>
-                        <th>TOTAL</th>
-                        <th>ACCIÓN</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {detalles.map((item, index) => (
-                        <tr key={item.id}>
-                          <td>{detalles.length - index}</td>
-                          <td>{item.codBarra}</td>
-                          <td className="text-start">{item.nombre}</td>
-                          <td>{item.cantidad}</td>
-                          <td>{item.precioUnitario.toLocaleString("es-PY")}</td>
-                          <td>{item.total.toLocaleString("es-PY")}</td>
-                          <td>
-                            <button className="btn btn-sm btn-danger" onClick={() => handleEliminarItem(item.id)}>DEL</button>
-                          </td>
-                        </tr>))}
-                    </tbody>
-                  </table>
+              <div className="col-sm-3">
+                <div className="row g-1">
+                  <div className="col-sm-3 text-center">
+                    <button
+                      className="btn btn-primary btn-sm fw-bold w-100"
+                      onClick={handleActualizarFactura}
+                    >
+                      Update
+                    </button>
+                  </div>
+
+                  <div className="col-sm-3 text-center">
+                    <button
+                      className="btn btn-success btn-sm fw-bold w-100"
+                      onClick={handleEmitirFactura}
+                      disabled={loadingEmitir}
+                    >
+                      {loadingEmitir ? "Emitiendo..." : "Emitir"}
+                    </button>
+                  </div>
+
+                  <div className="col-sm-3 text-center">
+                    <button className="btn btn-danger btn-sm fw-bold w-100">Anular</button>
+                  </div>
+
+                  <div className="col-sm-3 text-center">
+                    <div className="dropdown">
+                      <button
+                        className="btn btn-secondary btn-sm fw-bold dropdown-toggle w-100"
+                        type="button"
+                        data-bs-toggle="dropdown"
+                        aria-expanded="false"
+                      >
+                        {tipoFactura}
+                      </button>
+                      <ul className="dropdown-menu w-100">
+                        <li>
+                          <button
+                            className="dropdown-item"
+                            type="button"
+                            onClick={() => setTipoFactura("FCC")}
+                          >
+                            FCC
+                          </button>
+                        </li>
+                        <li>
+                          <button
+                            className="dropdown-item"
+                            type="button"
+                            onClick={() => setTipoFactura("FCR")}
+                          >
+                            FCR
+                          </button>
+                        </li>
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="col-sm-2">
+                <div className="row g-1">
+                  <div className="col-auto fw-bold">Estado:</div>
+                  <div className="col-sm-6 fw-bold text-center">
+                    <input
+                      type="text"
+                      className="form-control form-control-sm text-center"
+                      value={facturaOriginal?.estado || "BORRADOR"}
+                      disabled
+                      readOnly
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="col-sm-2">
+                <div className="row g-1">
+                  <div className="col-auto fw-bold">Draft:</div>
+                  <div className="col">
+                    <input
+                      type="text"
+                      className="form-control form-control-sm text-center"
+                      value={id || ""}
+                      disabled
+                      readOnly
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="col-sm-3">
+                <div className="row g-1">
+                  <div className="col-auto fw-bold">Factura Nº:</div>
+                  <div className="col">
+                    <input
+                      type="text"
+                      className="form-control form-control-sm text-center"
+                      value={facturaOriginal?.numeroFactura || ""}
+                      disabled
+                      readOnly
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="col-sm-2">
+                <div className="row g-1">
+                  <div className="col-auto fw-bold">Emisión:</div>
+                  <div className="col">
+                    <input
+                      type="text"
+                      className="form-control form-control-sm text-center"
+                      value={formatearFecha(facturaOriginal?.fechaEmision)}
+                      disabled
+                      readOnly
+                    />
+                  </div>
                 </div>
               </div>
             </div>
-            </div>
+          </div>
         </div>
-    );
+      </div>
+
+      {/* 🟩 PRIMERA FILA: CLIENTES + MEDIO DE PAGOS */}
+      <div className="row mb-2">
+        <div className="col-sm-6">
+          <div className="border border-success bg-light text-dark p-2 rounded">
+            {/* Primera fila: Buscador de cliente */}
+            <div className="row mb-2 position-relative">
+              <div className="col-sm-12">
+                <input
+                  type="text"
+                  className="form-control form-control-sm"
+                  placeholder="Buscar cliente..."
+                  value={clienteQuery}
+                  onChange={(e) => setClienteQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (clientesFiltrados.length === 0) return;
+                    if (e.key === "ArrowDown") {
+                      e.preventDefault();
+                      setClienteSeleccionadoIndex((prev) =>
+                        prev < clientesFiltrados.length - 1 ? prev + 1 : 0
+                      );
+                    } else if (e.key === "ArrowUp") {
+                      e.preventDefault();
+                      setClienteSeleccionadoIndex((prev) =>
+                        prev > 0 ? prev - 1 : clientesFiltrados.length - 1
+                      );
+                    } else if (e.key === "Enter" && clienteSeleccionadoIndex >= 0) {
+                      handleSeleccionarCliente(clientesFiltrados[clienteSeleccionadoIndex]);
+                    }
+                  }}
+                />
+
+                {clientesFiltrados.length > 0 && (
+                  <ul className="list-group position-absolute z-3 w-100">
+                    {clientesFiltrados.map((cliente, index) => (
+                      <li
+                        key={cliente.id}
+                        className={`list-group-item list-group-item-action ${
+                          index === clienteSeleccionadoIndex ? "active" : ""
+                        }`}
+                        onClick={() => handleSeleccionarCliente(cliente)}
+                        style={{ cursor: "pointer" }}
+                      >
+                        {cliente.ruc} - {cliente.nombre}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+
+            {/* Segunda fila: RUC y Nombre del Cliente */}
+            <div className="row g-2">
+              <div className="col-sm-4">
+                <input
+                  type="text"
+                  className="form-control form-control-sm text-center"
+                  placeholder="RUC"
+                  value={clienteSeleccionado?.ruc || ""}
+                  disabled
+                  readOnly
+                />
+              </div>
+              <div className="col-sm-8">
+                <input
+                  type="text"
+                  className="form-control form-control-sm text-center"
+                  placeholder="Nombre del Cliente"
+                  value={clienteSeleccionado?.nombre || ""}
+                  disabled
+                  readOnly
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="col-sm-6">
+          <div className="border border-success bg-light text-dark p-2 rounded">
+            {/* Primera fila: Total y Saldo */}
+            <div className="row mb-2">
+              {/* Total */}
+              <div className="col-sm-6">
+                <div className="row">
+                  <div className="col-sm-6">
+                    <label className="form-label fw-bold mb-1">Total:</label>
+                  </div>
+                  <div className="col-sm-6">
+                    <input
+                      type="text"
+                      className="form-control form-control-sm text-center bg-black text-info fw-bold"
+                      value={total.toLocaleString("es-PY")}
+                      disabled
+                      readOnly
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Saldo */}
+              <div className="col-sm-6">
+                <div className="row">
+                  <div className="col-sm-6">
+                    <label className="form-label fw-bold mb-1">Saldo:</label>
+                  </div>
+
+                  <div className="col-sm-6">
+                    <input
+                      type="text"
+                      className="form-control form-control-sm text-end"
+                      value={saldo.toLocaleString("es-PY")}
+                      disabled
+                      readOnly
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Segunda fila: Importe Aplicado y Botón Pagar */}
+            <div className="row">
+              {/* Importe Aplicado */}
+              <div className="col-sm-6">
+                <div className="row">
+                  <div className="col-sm-6">
+                    <label className="form-label fw-bold mb-1">Pagado:</label>
+                  </div>
+
+                  <div className="col-sm-6">
+                    <input
+                      type="text"
+                      className="form-control form-control-sm text-end"
+                      value={montoAplicado.toLocaleString("es-PY")}
+                      disabled
+                      readOnly
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Botón Pagar */}
+              <div className="col-sm-6 text-center">
+                <button
+                  type="button"
+                  className="btn btn-dark btn-sm"
+                  onClick={() => router.push(`/pagos/nuevo?facturaId=${id}`)}
+                >
+                  Pagar
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* 🟩 SEGUNDA FILA: productos */}
+      <div className="row mb-2">
+        <div className="col-sm-12">
+          <div className="border border-success bg-light text-dark p-2 rounded">
+            <div className="row align-items-center">
+              <div className="col-8">
+                <div className="row mb-3">
+                  <div className="col">
+                    <input
+                      type="text"
+                      className="form-control form-control-sm"
+                      placeholder="Buscar producto por nombre o código barra..."
+                      value={productoQuery}
+                      onChange={(e) => setProductoQuery(e.target.value)}
+                      ref={productoQueryRef}
+                      onKeyDown={(e) => {
+                        if (productosFiltrados.length === 0) return;
+                        if (e.key === "ArrowDown") {
+                          e.preventDefault();
+                          setProductoIndex((prev) =>
+                            prev < productosFiltrados.length - 1 ? prev + 1 : 0
+                          );
+                        } else if (e.key === "ArrowUp") {
+                          e.preventDefault();
+                          setProductoIndex((prev) =>
+                            prev > 0 ? prev - 1 : productosFiltrados.length - 1
+                          );
+                        } else if (e.key === "Enter" && productoIndex >= 0) {
+                          handleSeleccionarProducto(productosFiltrados[productoIndex]);
+                        }
+                      }}
+                    />
+                    {productosFiltrados.length > 0 && (
+                      <ul className="list-group position-absolute z-3 w-100">
+                        {productosFiltrados.map((p, index) => (
+                          <li
+                            key={p.id}
+                            className={`list-group-item list-group-item-action ${
+                              index === productoIndex ? "active" : ""
+                            }`}
+                            onClick={() => handleSeleccionarProducto(p)}
+                            style={{ cursor: "pointer" }}
+                          >
+                            {p.codigoBarra} - {p.nombre}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                </div>
+                <div className="row g-2">
+                  <div className="col-3 text-center fw-bold">COD. BARRA</div>
+                  <div className="col text-center fw-bold">PRODUCTO</div>
+                </div>
+                <div className="row g-2">
+                  <div className="col-3">
+                    <input
+                      type="text"
+                      className="form-control form-control-sm text-center"
+                      value={productoSeleccionado?.codigoBarra || ""}
+                      disabled
+                      readOnly
+                    />
+                  </div>
+                  <div className="col">
+                    <input
+                      type="text"
+                      className="form-control form-control-sm text-center"
+                      value={productoSeleccionado?.nombre || ""}
+                      disabled
+                      readOnly
+                    />
+                  </div>
+                </div>
+              </div>
+              <div className="col-2">
+                <div className="row mb-3">
+                  <div className="col">
+                    <input
+                      type="number"
+                      className="form-control form-control-sm text-center bg-white text-black"
+                      placeholder="Cantidad..."
+                      min="1"
+                      value={cantidad}
+                      onChange={(e) => setCantidad(e.target.value)}
+                      ref={cantidadInputRef}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          handleAgregarProducto();
+                        }
+                      }}
+                    />
+                  </div>
+                </div>
+                <div className="row">
+                  <div className="col text-center fw-bold">PRECIO UNIDAD</div>
+                </div>
+                <div className="row">
+                  <div className="col">
+                    <input
+                      type="text"
+                      className="form-control form-control-sm text-center"
+                      value={productoSeleccionado?.precio?.toLocaleString("es-PY") || ""}
+                      disabled
+                      readOnly
+                    />
+                  </div>
+                </div>
+              </div>
+              <div className="col-2">
+                <div className="row">
+                  <div className="col text-center">
+                    <button className="btn btn-warning btn-sm" onClick={handleAgregarProducto}>
+                      Añadir
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* 🟩 TABLA DE PRODUCTOS */}
+      <div className="row">
+        <div className="col-sm-12">
+          <div className="border border-success bg-light text-dark p-2 rounded">
+            <div className="table-responsive">
+              <table className="table table-bordered table-hover table-sm text-center align-middle mb-0">
+                <thead className="table-success">
+                  <tr>
+                    <th>Nº</th>
+                    <th>COD. BARRA</th>
+                    <th>PRODUCTO</th>
+                    <th>CANT.</th>
+                    <th>PRECIO UNIT.</th>
+                    <th>TOTAL</th>
+                    <th>ACCIÓN</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {detalles.map((item, index) => (
+                    <tr key={item.id}>
+                      <td>{detalles.length - index}</td>
+                      <td>{item.codBarra}</td>
+                      <td className="text-start">{item.nombre}</td>
+                      <td>{item.cantidad}</td>
+                      <td>{item.precioUnitario.toLocaleString("es-PY")}</td>
+                      <td>{item.total.toLocaleString("es-PY")}</td>
+                      <td>
+                        <button
+                          className="btn btn-sm btn-danger"
+                          onClick={() => handleEliminarItem(item.id)}
+                        >
+                          DEL
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }

@@ -190,7 +190,7 @@ export default function NuevaFacturaPage() {
 
       const facturaData = {
         numeroFactura: "", // Puede ser un código temporal o generado en backend
-        fechaEmision: new Date().toISOString(), // formato ISO
+        fechaEmision: null, // formato ISO
         clienteId: clienteSeleccionado?.id, // debe ser un número válido
         total: total, // asegúrate de que sea número, no string
         estado: "Borrador", // o "Emitido"
@@ -302,7 +302,7 @@ export default function NuevaFacturaPage() {
                                     <input
                                       type="text"
                                       className="form-control form-control-sm text-center"
-                                      value="100000"
+                                      value="SIN CREAR"
                                       disabled
                                       readOnly
                                     />
@@ -318,7 +318,7 @@ export default function NuevaFacturaPage() {
                                     <input
                                       type="text"
                                       className="form-control form-control-sm text-center"
-                                      value="100000"
+                                      value="0"
                                       disabled
                                       readOnly
                                     />
@@ -334,7 +334,7 @@ export default function NuevaFacturaPage() {
                                     <input
                                       type="text"
                                       className="form-control form-control-sm text-center"
-                                      value="26/04/2025"
+                                      value="0"
                                       disabled
                                       readOnly
                                     />
