@@ -183,6 +183,12 @@ export default function EditarFacturaPage() {
   };
 
   const handleAgregarProducto = () => {
+    // 🚫 Seguridad extra: no permitir agregar items si ya hay pagos
+    if (montoAplicado > 0) {
+      alert("No se puede agregar productos porque esta factura ya tiene pagos aplicados.");
+      return;
+    }
+
     if (!productoSeleccionado || !cantidad || isNaN(cantidad) || cantidad <= 0) return;
 
     const codBarra = productoSeleccionado.codigoBarra;
@@ -224,6 +230,12 @@ export default function EditarFacturaPage() {
   };
 
   const handleActualizarFactura = async () => {
+    // 🚫 Seguridad extra: no permitir actualizar si ya hay pagos
+    if (montoAplicado > 0) {
+      alert("No se puede actualizar la factura porque ya tiene pagos aplicados.");
+      return;
+    }
+
     if (!clienteSeleccionado || detalles.length === 0) {
       alert("Debes seleccionar un cliente y al menos un producto.");
       return;
@@ -274,46 +286,51 @@ export default function EditarFacturaPage() {
     }
   };
 
-  // ✅ emitir a crédito (validación FCC/FCR + bonus EMITIDA)
+  // ✅ emitir (FCC o FCR) con validación por saldo/estado (backend manda)
   const handleEmitirFactura = async () => {
-    if (facturaOriginal?.estado?.toUpperCase() === "EMITIDA") {
-      alert("Esta factura ya está emitida.");
-      return;
-    }
+  if (facturaOriginal?.estado?.toUpperCase() === "EMITIDA") {
+    alert("Esta factura ya está emitida.");
+    return;
+  }
 
-    if (tipoFactura !== "FCR") {
-      alert(
-        "No se puede emitir una factura en estado FCC.\nDebes cambiar a FCR para emitir a crédito."
-      );
-      return;
-    }
+  if (!id) {
+    alert("Primero debes crear la factura antes de emitir.");
+    return;
+  }
 
-    if (!id) {
-      alert("Primero debes crear la factura antes de emitir.");
-      return;
-    }
+  // ✅ regla: si quiere emitir en FCC, debe estar pagada completa (saldo 0)
+  if (tipoFactura === "FCC" && Number(saldo) > 0) {
+    alert("Para emitir en FCC (contado) el saldo debe ser 0. Cargá el pago completo primero.");
+    return;
+  }
 
-    try {
-      setLoadingEmitir(true);
-      const res = await axios.post(
-        `http://localhost:8080/api/facturas/${id}/emitir-credito`
-      );
+  try {
+    setLoadingEmitir(true);
 
-      alert(`Factura emitida a crédito. Nº: ${res.data}`);
+    // ✅ endpoint según tipo
+    const url =
+      tipoFactura === "FCC"
+        ? `http://localhost:8080/api/facturas/${id}/emitir-contado`
+        : `http://localhost:8080/api/facturas/${id}/emitir-credito`;
 
-      // ✅ volver a cargar para reflejar estado/numero/fecha
-      await cargarFactura();
-      router.refresh();
-    } catch (error) {
-      console.error("Error al emitir factura:", error);
-      const msg =
-        error?.response?.data ||
-        "Ocurrió un error al emitir la factura. Verifica el estado e intenta nuevamente.";
-      alert(msg);
-    } finally {
-      setLoadingEmitir(false);
-    }
+    const res = await axios.post(url);
+
+    alert(`Factura emitida. Nº: ${res.data}`);
+
+    // ✅ volver a cargar para reflejar estado/numero/fecha/saldo/pagado
+    await cargarFactura();
+    router.refresh();
+  } catch (error) {
+    console.error("Error al emitir factura:", error);
+    const msg =
+      error?.response?.data ||
+      "Ocurrió un error al emitir la factura. Verifica el estado e intenta nuevamente.";
+    alert(msg);
+  } finally {
+    setLoadingEmitir(false);
+  }
   };
+
 
   return (
     <div className="container-fluid bg-dark text-white p-2">
@@ -328,6 +345,8 @@ export default function EditarFacturaPage() {
                     <button
                       className="btn btn-primary btn-sm fw-bold w-100"
                       onClick={handleActualizarFactura}
+                      disabled={montoAplicado > 0}
+                      title={montoAplicado > 0 ? "No se puede modificar: ya hay pagos aplicados" : ""}
                     >
                       Update
                     </button>
@@ -712,7 +731,12 @@ export default function EditarFacturaPage() {
               <div className="col-2">
                 <div className="row">
                   <div className="col text-center">
-                    <button className="btn btn-warning btn-sm" onClick={handleAgregarProducto}>
+                    <button
+                      className="btn btn-warning btn-sm"
+                      onClick={handleAgregarProducto}
+                      disabled={montoAplicado > 0}
+                      title={montoAplicado > 0 ? "No se puede agregar items: ya hay pagos aplicados" : ""}
+                    >
                       Añadir
                     </button>
                   </div>

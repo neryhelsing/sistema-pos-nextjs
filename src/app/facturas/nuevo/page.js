@@ -455,7 +455,7 @@ export default function NuevaFacturaPage() {
                                     <input
                                       type="text"
                                       className="form-control form-control-sm text-end"
-                                      placeholder="10000000"
+                                      placeholder=""
                                       disabled
                                       readOnly
                                     />
@@ -479,7 +479,7 @@ export default function NuevaFacturaPage() {
                                     <input
                                       type="text"
                                       className="form-control form-control-sm text-end"
-                                      placeholder="10000000"
+                                      placeholder=""
                                       disabled
                                       readOnly
                                     />

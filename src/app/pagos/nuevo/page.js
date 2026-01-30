@@ -1,9 +1,11 @@
 "use client";
 
 import { useState, useEffect, useRef, useMemo } from "react";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
+
 
 export default function NuevoPagoPage() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const facturaIdFromUrl = searchParams.get("facturaId"); // /pagos/nuevo?facturaId=123
   const facturaIdFocus = facturaIdFromUrl ? Number(facturaIdFromUrl) : null;
@@ -343,6 +345,13 @@ export default function NuevoPagoPage() {
       setOkMsg(
         `Pago creado: Nº ${data.nPago} - Total ${Number(data.totalPagado).toLocaleString("es-PY")} Gs`
       );
+
+      // ✅ Si vinimos desde una factura, volver a esa factura para emitirla
+      if (facturaIdFromUrl) {
+        router.push(`/facturas/editar/${facturaIdFromUrl}`);
+        return;
+      }
+
 
       // reset
       setPagos({});
