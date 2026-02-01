@@ -26,8 +26,24 @@ export default function NuevaFacturaPage() {
   const [productoSeleccionado, setProductoSeleccionado] = useState(null);
   const [productoIndex, setProductoIndex] = useState(-1);
   const [cantidad, setCantidad] = useState("");
+  const [precioUnitario, setPrecioUnitario] = useState("");
   const cantidadInputRef = useRef(null);
   const productoQueryRef = useRef(null); // ✅ Nuevo ref para el input de búsqueda de productos
+
+  // ✅ Helpers PY: miles con punto (ej: 3000 -> "3.000")
+  const formatearMilesPY = (valor) => {
+    if (valor === null || valor === undefined) return "";
+    const digits = String(valor).replace(/\D/g, ""); // solo números
+    if (!digits) return "";
+    return digits.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  };
+
+  const parseMilesPY = (valor) => {
+    if (valor === null || valor === undefined) return 0;
+    const digits = String(valor).replace(/\D/g, "");
+    return digits ? Number(digits) : 0;
+  };
+
 
 
   // Detalles agregados
@@ -113,17 +129,18 @@ export default function NuevaFacturaPage() {
 
 
   const handleSeleccionarProducto = (producto) => {
-  setProductoSeleccionado(producto);
-  setProductoQuery("");
-  setProductosFiltrados([]);
-  setProductoIndex(-1);
+    setProductoSeleccionado(producto);
+    setPrecioUnitario(formatearMilesPY(producto?.precio ?? ""));
+    setProductoQuery("");
+    setProductosFiltrados([]);
+    setProductoIndex(-1);
 
-  setTimeout(() => {
-    if (cantidadInputRef.current) {
-      cantidadInputRef.current.focus(); // ✅ foco al input de cantidad
-    }
-  }, 100); // pequeño delay para asegurar que el render se complete
-};
+    setTimeout(() => {
+      if (cantidadInputRef.current) {
+        cantidadInputRef.current.focus(); // ✅ foco al input de cantidad
+      }
+    }, 100); // pequeño delay para asegurar que el render se complete
+  };
 
 
     const handleAgregarProducto = () => {
@@ -147,14 +164,19 @@ export default function NuevaFacturaPage() {
         });
       } else {
         // ✅ Si no existe, agregamos nuevo producto
-        const totalItem = productoSeleccionado.precio * cantidadNueva;
+        const pu = parseMilesPY(precioUnitario);
+        if (isNaN(pu) || pu <= 0) return;
+
+        const totalItem = pu * cantidadNueva;
+
         const nuevoItem = {
           id: Date.now() + Math.random(),
           productoId: productoSeleccionado.id, // ← ✅ ESTE CAMPO ES NECESARIO
           codBarra: codBarra,
           nombre: productoSeleccionado.nombre,
           cantidad: cantidadNueva,
-          precioUnitario: productoSeleccionado.precio,
+          precioEditable: productoSeleccionado.precioEditable, // ✅ NUEVO
+          precioUnitario: pu,
           total: totalItem,
         };
         nuevosDetalles = [nuevoItem, ...detalles]; // ✅ Agregar al inicio en vez de al final
@@ -163,6 +185,8 @@ export default function NuevaFacturaPage() {
       setDetalles(nuevosDetalles);
       setProductoSeleccionado(null);
       setCantidad("");
+      setPrecioUnitario("");
+
 
       // ✅ Volver a enfocar el input de búsqueda de productos
       setTimeout(() => {
@@ -435,7 +459,7 @@ export default function NuevaFacturaPage() {
                                 <div className="col-sm-6">
                                     <input
                                       type="text"
-                                      className="form-control form-control-sm text-center bg-black text-info fw-bold"
+                                      className="form-control form-control-sm text-end bg-black text-info fw-bold"
                                       value={total.toLocaleString("es-PY")}
                                       disabled
                                       readOnly
@@ -591,10 +615,20 @@ export default function NuevaFacturaPage() {
                   <div className="col">
                     <input
                       type="text"
-                      className="form-control form-control-sm text-center"
-                      value={productoSeleccionado?.precio?.toLocaleString("es-PY") || ""}
-                      disabled
-                      readOnly
+                      className={`form-control form-control-sm text-center ${
+                        productoSeleccionado && !productoSeleccionado.precioEditable ? "text-muted" : ""
+                      }`}
+                      value={precioUnitario}
+                      disabled={!productoSeleccionado || (productoSeleccionado && !productoSeleccionado.precioEditable)}
+                      onFocus={() => {
+                        // ✅ si es editable, al hacer click se limpia para escribir directo
+                        if (productoSeleccionado?.precioEditable) setPrecioUnitario("");
+                      }}
+                      onChange={(e) => {
+                        // ✅ permitir escribir y mantener miles con punto
+                        const digits = e.target.value.replace(/\D/g, "");
+                        setPrecioUnitario(formatearMilesPY(digits));
+                      }}
                     />
                   </div>
                 </div>

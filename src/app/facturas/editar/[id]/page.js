@@ -19,9 +19,26 @@ export default function EditarFacturaPage() {
   const [productoSeleccionado, setProductoSeleccionado] = useState(null);
   const [productoIndex, setProductoIndex] = useState(-1);
   const [cantidad, setCantidad] = useState("");
+  const [precioUnitario, setPrecioUnitario] = useState("");
+
 
   const cantidadInputRef = useRef(null);
   const productoQueryRef = useRef(null);
+
+  // ✅ Helpers PY: miles con punto (ej: 3000 -> "3.000")
+  const formatearMilesPY = (valor) => {
+    if (valor === null || valor === undefined) return "";
+    const digits = String(valor).replace(/\D/g, ""); // solo números
+    if (!digits) return "";
+    return digits.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  };
+
+  const parseMilesPY = (valor) => {
+    if (valor === null || valor === undefined) return 0;
+    const digits = String(valor).replace(/\D/g, "");
+    return digits ? Number(digits) : 0;
+  };
+
 
   const [detalles, setDetalles] = useState([]);
   const [total, setTotal] = useState(0);
@@ -31,6 +48,28 @@ export default function EditarFacturaPage() {
   const [facturaOriginal, setFacturaOriginal] = useState(null);
 
   const [loadingEmitir, setLoadingEmitir] = useState(false);
+
+  // ✅ Bloqueos de edición
+  const estadoFactura = (facturaOriginal?.estado || "BORRADOR").toUpperCase();
+  const bloqueoTotal = estadoFactura === "EMITIDA";          // EMITIDA: no se cambia nada
+  const bloqueoClienteYProductos = montoAplicado > 0;        // con pagos: no tocar cliente ni items
+
+  // ✅ Advertir salida si la factura sigue en BORRADOR (y ya cargó desde backend)
+  const advertirSalida = !!facturaOriginal && estadoFactura === "BORRADOR";
+
+  // ✅ Helper: serializa detalles en orden estable para comparar sin falsos positivos
+  const serializarDetallesNormalizados = (arr) => {
+    const normalizados = (arr || [])
+      .map((d) => ({
+        productoId: Number(d.productoId),
+        cantidad: Number(d.cantidad),
+        precioUnitario: Number(d.precioUnitario),
+      }))
+      .sort((a, b) => a.productoId - b.productoId); // orden fijo
+
+    return JSON.stringify(normalizados);
+  };
+
 
   // ✅ Helper: formatear fecha dd/MM/yyyy
   const formatearFecha = (fecha) => {
@@ -89,6 +128,7 @@ export default function EditarFacturaPage() {
             productoId: producto.id,
             codBarra: producto.codigoBarra,
             nombre: producto.nombre,
+            precioEditable: producto.precioEditable, // ✅ NUEVO
             cantidad: d.cantidad,
             precioUnitario: d.precioUnitario,
             total: d.cantidad * d.precioUnitario,
@@ -97,7 +137,9 @@ export default function EditarFacturaPage() {
       );
 
       setDetalles(adaptados.reverse());
-      setDetallesOriginales(JSON.stringify(adaptados));
+      // ✅ Guardar "originales" en formato SIMPLE para comparar correctamente
+      setDetallesOriginales(serializarDetallesNormalizados(factura.detalles));
+
       // ✅ saldo ya seteado desde BD arriba
     } catch (err) {
       console.error("Error al cargar factura:", err);
@@ -109,6 +151,90 @@ export default function EditarFacturaPage() {
   useEffect(() => {
     cargarFactura();
   }, [cargarFactura]);
+
+  // ⚠️ Advertencia al salir si la factura está en BORRADOR
+  useEffect(() => {
+    if (!advertirSalida) return;
+
+    // 1) Cerrar pestaña / recargar / cambiar URL manual
+    const handleBeforeUnload = (e) => {
+      e.preventDefault();
+      e.returnValue = ""; // mensaje estándar del navegador
+    };
+
+    // 2) Click en enlaces (<a>) dentro de la app (incluye <Link /> de Next)
+    const handleDocumentClick = (e) => {
+      // Solo botón izquierdo, sin teclas especiales (ctrl/shift/alt/meta)
+      if (e.defaultPrevented) return;
+      if (e.button !== 0) return;
+      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+
+      // Buscar el <a> más cercano
+      const anchor = e.target?.closest?.("a");
+      if (!anchor) return;
+
+      const href = anchor.getAttribute("href");
+      if (!href) return;
+
+      // Ignorar anchors, javascript:, descargas, target=_blank
+      if (href.startsWith("#")) return;
+      if (href.startsWith("javascript:")) return;
+      if (anchor.hasAttribute("download")) return;
+      if (anchor.target && anchor.target !== "_self") return;
+
+      // Si es la misma página, no molestar
+      const url = new URL(anchor.href, window.location.href);
+      if (url.href === window.location.href) return;
+
+      // Confirmación (2 opciones: Quedarme / Continuar)
+      const ok = window.confirm(
+        "⚠️ Esta factura aún no fue EMITIDA (estado BORRADOR).\n\n" +
+          "• ACEPTAR: salir y continuar\n" +
+          "• CANCELAR: quedarme en esta página"
+      );
+
+      if (!ok) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+
+    // 3) Botón Atrás/Adelante del navegador
+    // Truco: empujamos un estado al historial y, si intenta volver, confirmamos.
+    const pushDummyState = () => {
+      try {
+        window.history.pushState({ __pos_guard: true }, "", window.location.href);
+      } catch {}
+    };
+
+    const handlePopState = () => {
+      const ok = window.confirm(
+        "⚠️ Esta factura aún no fue EMITIDA (estado BORRADOR).\n\n" +
+          "• ACEPTAR: salir y continuar\n" +
+          "• CANCELAR: quedarme en esta página"
+      );
+
+      if (!ok) {
+        // Re-poner el estado para permanecer
+        pushDummyState();
+      }
+      // Si OK, dejamos que siga (no bloqueamos)
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    document.addEventListener("click", handleDocumentClick, true); // captura
+    window.addEventListener("popstate", handlePopState);
+
+    // Cargar "trampa" de historial para back/forward
+    pushDummyState();
+
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      document.removeEventListener("click", handleDocumentClick, true);
+      window.removeEventListener("popstate", handlePopState);
+    };
+  }, [advertirSalida]);
+
 
   // 🔁 Recalcular total
   useEffect(() => {
@@ -136,6 +262,15 @@ export default function EditarFacturaPage() {
   }, [clienteQuery]);
 
   const handleSeleccionarCliente = (cliente) => {
+    if (bloqueoTotal || bloqueoClienteYProductos) {
+      alert(
+        bloqueoTotal
+          ? "No se puede modificar: la factura ya está EMITIDA."
+          : "No se puede cambiar el cliente: ya hay pagos aplicados."
+      );
+      return;
+    }
+
     setClienteSeleccionado(cliente);
     setClienteQuery("");
     setClientesFiltrados([]);
@@ -147,6 +282,7 @@ export default function EditarFacturaPage() {
       }
     }, 100);
   };
+
 
   // 🔍 Buscar productos
   useEffect(() => {
@@ -176,6 +312,7 @@ export default function EditarFacturaPage() {
 
   const handleSeleccionarProducto = (producto) => {
     setProductoSeleccionado(producto);
+    setPrecioUnitario(formatearMilesPY(producto?.precio ?? ""));
     setProductoQuery("");
     setProductosFiltrados([]);
     setProductoIndex(-1);
@@ -183,11 +320,16 @@ export default function EditarFacturaPage() {
   };
 
   const handleAgregarProducto = () => {
-    // 🚫 Seguridad extra: no permitir agregar items si ya hay pagos
-    if (montoAplicado > 0) {
-      alert("No se puede agregar productos porque esta factura ya tiene pagos aplicados.");
+    // 🚫 No permitir agregar items si hay pagos aplicados o si está EMITIDA
+    if (bloqueoTotal || bloqueoClienteYProductos) {
+      alert(
+        bloqueoTotal
+          ? "No se puede modificar: la factura ya está EMITIDA."
+          : "No se puede agregar productos: ya hay pagos aplicados."
+      );
       return;
     }
+
 
     if (!productoSeleccionado || !cantidad || isNaN(cantidad) || cantidad <= 0) return;
 
@@ -207,53 +349,101 @@ export default function EditarFacturaPage() {
         return item;
       });
     } else {
+      const pu = parseMilesPY(precioUnitario);
+      if (isNaN(pu) || pu <= 0) return;
+
       const nuevoItem = {
         id: productoSeleccionado.id,
         productoId: productoSeleccionado.id,
         codBarra,
         nombre: productoSeleccionado.nombre,
+        precioEditable: productoSeleccionado.precioEditable, // ✅ guardamos flag
         cantidad: cantidadNueva,
-        precioUnitario: productoSeleccionado.precio,
-        total: productoSeleccionado.precio * cantidadNueva,
+        precioUnitario: pu,
+        total: pu * cantidadNueva,
       };
+
       nuevosDetalles = [nuevoItem, ...detalles];
     }
 
     setDetalles(nuevosDetalles);
     setProductoSeleccionado(null);
     setCantidad("");
+    setPrecioUnitario("");
     setTimeout(() => productoQueryRef.current?.focus(), 100);
   };
 
   const handleEliminarItem = (id) => {
+    if (bloqueoTotal || bloqueoClienteYProductos) {
+      alert(
+        bloqueoTotal
+          ? "No se puede modificar: la factura ya está EMITIDA."
+          : "No se puede eliminar items: ya hay pagos aplicados."
+      );
+      return;
+    }
+
     setDetalles(detalles.filter((item) => item.id !== id));
   };
 
-  const handleActualizarFactura = async () => {
-    // 🚫 Seguridad extra: no permitir actualizar si ya hay pagos
-    if (montoAplicado > 0) {
-      alert("No se puede actualizar la factura porque ya tiene pagos aplicados.");
+
+
+  const handleIrAPagar = () => {
+    // ✅ detectar cambios pendientes (detalles vs originales)
+    const actualesSerializados = serializarDetallesNormalizados(detalles);
+    const productosModificados = actualesSerializados !== detallesOriginales;
+
+    // ✅ detectar si cambió el cliente o el tipo
+    const clienteCambiado = clienteSeleccionado?.id !== facturaOriginal?.clienteId;
+    const tipoCambiado = tipoFactura !== facturaOriginal?.tipo;
+
+    // ✅ Regla: si hay cambios, debe hacer Update antes de pagar
+    if (productosModificados || clienteCambiado || tipoCambiado) {
+      alert("Hay cambios en la factura. Primero presioná Update para guardar, y después Pagá.");
       return;
     }
+
+    router.push(`/pagos/nuevo?facturaId=${id}`);
+  };
+
+
+
+
+  const handleActualizarFactura = async () => {
+    // 🚫 Si está EMITIDA no se puede actualizar nada
+    if (bloqueoTotal) {
+      alert("No se puede actualizar: la factura ya está EMITIDA.");
+      return;
+    }
+
 
     if (!clienteSeleccionado || detalles.length === 0) {
       alert("Debes seleccionar un cliente y al menos un producto.");
       return;
     }
 
-    const actualesSerializados = JSON.stringify(
-      detalles.map((d) => ({
-        productoId: d.productoId,
-        cantidad: d.cantidad,
-        precioUnitario: d.precioUnitario,
-      }))
-    );
+    const actualesSerializados = serializarDetallesNormalizados(detalles);
 
-    const originales = JSON.parse(detallesOriginales);
-
-    const productosModificados = actualesSerializados !== JSON.stringify(originales);
+    // ✅ comparar ya normalizado (sin problema de orden)
+    const productosModificados = actualesSerializados !== detallesOriginales;
     const clienteCambiado = clienteSeleccionado.id !== facturaOriginal?.clienteId;
     const tipoCambiado = tipoFactura !== facturaOriginal?.tipo;
+
+
+    // ✅ Si hay pagos aplicados, solo permitimos actualizar el TIPO (FCC/FCR)
+    if (montoAplicado > 0) {
+      if (productosModificados || clienteCambiado) {
+        alert("Con pagos aplicados no se puede modificar cliente ni productos. Solo se permite cambiar el tipo (FCC/FCR).");
+        return;
+      }
+
+      if (!tipoCambiado) {
+        alert("No se detectaron cambios.");
+        return;
+      }
+    }
+
+
 
     if (!productosModificados && !clienteCambiado && !tipoCambiado) {
       alert("No se detectaron cambios.");
@@ -288,47 +478,57 @@ export default function EditarFacturaPage() {
 
   // ✅ emitir (FCC o FCR) con validación por saldo/estado (backend manda)
   const handleEmitirFactura = async () => {
-  if (facturaOriginal?.estado?.toUpperCase() === "EMITIDA") {
-    alert("Esta factura ya está emitida.");
-    return;
-  }
+    if (facturaOriginal?.estado?.toUpperCase() === "EMITIDA") {
+        alert("Esta factura ya está emitida.");
+        return;
+      }
 
-  if (!id) {
-    alert("Primero debes crear la factura antes de emitir.");
-    return;
-  }
+      if (!id) {
+        alert("Primero debes crear la factura antes de emitir.");
+        return;
+      }
 
-  // ✅ regla: si quiere emitir en FCC, debe estar pagada completa (saldo 0)
-  if (tipoFactura === "FCC" && Number(saldo) > 0) {
-    alert("Para emitir en FCC (contado) el saldo debe ser 0. Cargá el pago completo primero.");
-    return;
-  }
+      // ✅ NO permitir emitir si hay cambios sin guardar (Update)
+      const actualesSerializados = serializarDetallesNormalizados(detalles);
+      const productosModificados = actualesSerializados !== detallesOriginales;
+      const clienteCambiado = clienteSeleccionado?.id !== facturaOriginal?.clienteId;
+      const tipoCambiado = tipoFactura !== facturaOriginal?.tipo;
 
-  try {
-    setLoadingEmitir(true);
+      if (productosModificados || clienteCambiado || tipoCambiado) {
+        alert("Hay cambios en la factura. Primero presioná Update para guardar, y después Emitir.");
+        return;
+      }
 
-    // ✅ endpoint según tipo
-    const url =
-      tipoFactura === "FCC"
-        ? `http://localhost:8080/api/facturas/${id}/emitir-contado`
-        : `http://localhost:8080/api/facturas/${id}/emitir-credito`;
+      // ✅ regla: si quiere emitir en FCC, debe estar pagada completa (saldo 0)
+      if (tipoFactura === "FCC" && Number(saldo) > 0) {
+        alert("Para emitir en FCC (contado) el saldo debe ser 0. Cargá el pago completo primero.");
+        return;
+      }
+    try {
+      setLoadingEmitir(true);
 
-    const res = await axios.post(url);
+      // ✅ endpoint según tipo
+      const url =
+        tipoFactura === "FCC"
+          ? `http://localhost:8080/api/facturas/${id}/emitir-contado`
+          : `http://localhost:8080/api/facturas/${id}/emitir-credito`;
 
-    alert(`Factura emitida. Nº: ${res.data}`);
+      const res = await axios.post(url);
 
-    // ✅ volver a cargar para reflejar estado/numero/fecha/saldo/pagado
-    await cargarFactura();
-    router.refresh();
-  } catch (error) {
-    console.error("Error al emitir factura:", error);
-    const msg =
-      error?.response?.data ||
-      "Ocurrió un error al emitir la factura. Verifica el estado e intenta nuevamente.";
-    alert(msg);
-  } finally {
-    setLoadingEmitir(false);
-  }
+      alert(`Factura emitida. Nº: ${res.data}`);
+
+      // ✅ volver a cargar para reflejar estado/numero/fecha/saldo/pagado
+      await cargarFactura();
+      router.refresh();
+    } catch (error) {
+      console.error("Error al emitir factura:", error);
+      const msg =
+        error?.response?.data ||
+        "Ocurrió un error al emitir la factura. Verifica el estado e intenta nuevamente.";
+      alert(msg);
+    } finally {
+      setLoadingEmitir(false);
+    }
   };
 
 
@@ -345,8 +545,14 @@ export default function EditarFacturaPage() {
                     <button
                       className="btn btn-primary btn-sm fw-bold w-100"
                       onClick={handleActualizarFactura}
-                      disabled={montoAplicado > 0}
-                      title={montoAplicado > 0 ? "No se puede modificar: ya hay pagos aplicados" : ""}
+                      disabled={bloqueoTotal}
+                      title={
+                        bloqueoTotal
+                          ? "Factura EMITIDA: no se puede modificar"
+                          : montoAplicado > 0
+                          ? "Con pagos aplicados: solo se permite Update para cambiar el tipo (FCC/FCR)"
+                          : ""
+                      }
                     >
                       Update
                     </button>
@@ -356,7 +562,7 @@ export default function EditarFacturaPage() {
                     <button
                       className="btn btn-success btn-sm fw-bold w-100"
                       onClick={handleEmitirFactura}
-                      disabled={loadingEmitir}
+                      disabled={loadingEmitir || bloqueoTotal}
                     >
                       {loadingEmitir ? "Emitiendo..." : "Emitir"}
                     </button>
@@ -373,6 +579,7 @@ export default function EditarFacturaPage() {
                         type="button"
                         data-bs-toggle="dropdown"
                         aria-expanded="false"
+                        disabled={bloqueoTotal}
                       >
                         {tipoFactura}
                       </button>
@@ -381,7 +588,7 @@ export default function EditarFacturaPage() {
                           <button
                             className="dropdown-item"
                             type="button"
-                            onClick={() => setTipoFactura("FCC")}
+                            onClick={() => !bloqueoTotal && setTipoFactura("FCC")}
                           >
                             FCC
                           </button>
@@ -390,7 +597,7 @@ export default function EditarFacturaPage() {
                           <button
                             className="dropdown-item"
                             type="button"
-                            onClick={() => setTipoFactura("FCR")}
+                            onClick={() => !bloqueoTotal && setTipoFactura("FCR")}
                           >
                             FCR
                           </button>
@@ -476,6 +683,7 @@ export default function EditarFacturaPage() {
                   type="text"
                   className="form-control form-control-sm"
                   placeholder="Buscar cliente..."
+                  disabled={bloqueoTotal || bloqueoClienteYProductos}
                   value={clienteQuery}
                   onChange={(e) => setClienteQuery(e.target.value)}
                   onKeyDown={(e) => {
@@ -554,7 +762,7 @@ export default function EditarFacturaPage() {
                   <div className="col-sm-6">
                     <input
                       type="text"
-                      className="form-control form-control-sm text-center bg-black text-info fw-bold"
+                      className="form-control form-control-sm text-end bg-black text-info fw-bold"
                       value={total.toLocaleString("es-PY")}
                       disabled
                       readOnly
@@ -573,7 +781,7 @@ export default function EditarFacturaPage() {
                   <div className="col-sm-6">
                     <input
                       type="text"
-                      className="form-control form-control-sm text-end"
+                      className="form-control form-control-sm text-end bg-black text-warning fw-bold"
                       value={saldo.toLocaleString("es-PY")}
                       disabled
                       readOnly
@@ -595,7 +803,7 @@ export default function EditarFacturaPage() {
                   <div className="col-sm-6">
                     <input
                       type="text"
-                      className="form-control form-control-sm text-end"
+                      className="form-control form-control-sm text-end bg-black text-success fw-bold"
                       value={montoAplicado.toLocaleString("es-PY")}
                       disabled
                       readOnly
@@ -609,7 +817,7 @@ export default function EditarFacturaPage() {
                 <button
                   type="button"
                   className="btn btn-dark btn-sm"
-                  onClick={() => router.push(`/pagos/nuevo?facturaId=${id}`)}
+                  onClick={handleIrAPagar}
                 >
                   Pagar
                 </button>
@@ -631,6 +839,7 @@ export default function EditarFacturaPage() {
                       type="text"
                       className="form-control form-control-sm"
                       placeholder="Buscar producto por nombre o código barra..."
+                      disabled={bloqueoTotal || bloqueoClienteYProductos}
                       value={productoQuery}
                       onChange={(e) => setProductoQuery(e.target.value)}
                       ref={productoQueryRef}
@@ -702,6 +911,7 @@ export default function EditarFacturaPage() {
                       className="form-control form-control-sm text-center bg-white text-black"
                       placeholder="Cantidad..."
                       min="1"
+                      disabled={bloqueoTotal || bloqueoClienteYProductos}
                       value={cantidad}
                       onChange={(e) => setCantidad(e.target.value)}
                       ref={cantidadInputRef}
@@ -720,10 +930,25 @@ export default function EditarFacturaPage() {
                   <div className="col">
                     <input
                       type="text"
-                      className="form-control form-control-sm text-center"
-                      value={productoSeleccionado?.precio?.toLocaleString("es-PY") || ""}
-                      disabled
-                      readOnly
+                      className={`form-control form-control-sm text-center ${
+                        productoSeleccionado && !productoSeleccionado.precioEditable ? "text-muted" : ""
+                      }`}
+                      value={precioUnitario}
+                      disabled={
+                        !productoSeleccionado ||
+                        bloqueoTotal ||
+                        bloqueoClienteYProductos ||
+                        (productoSeleccionado && !productoSeleccionado.precioEditable)
+                      }
+                      onFocus={() => {
+                        // ✅ si es editable, al hacer click se limpia para escribir directo
+                        if (productoSeleccionado?.precioEditable && montoAplicado === 0) setPrecioUnitario("");
+                      }}
+                      onChange={(e) => {
+                        // ✅ permitir escribir y mantener miles con punto
+                        const digits = e.target.value.replace(/\D/g, "");
+                        setPrecioUnitario(formatearMilesPY(digits));
+                      }}
                     />
                   </div>
                 </div>
@@ -734,7 +959,7 @@ export default function EditarFacturaPage() {
                     <button
                       className="btn btn-warning btn-sm"
                       onClick={handleAgregarProducto}
-                      disabled={montoAplicado > 0}
+                      disabled={bloqueoTotal || bloqueoClienteYProductos}
                       title={montoAplicado > 0 ? "No se puede agregar items: ya hay pagos aplicados" : ""}
                     >
                       Añadir
@@ -777,6 +1002,7 @@ export default function EditarFacturaPage() {
                         <button
                           className="btn btn-sm btn-danger"
                           onClick={() => handleEliminarItem(item.id)}
+                          disabled={bloqueoTotal || bloqueoClienteYProductos}
                         >
                           DEL
                         </button>

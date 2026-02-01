@@ -12,8 +12,11 @@ export default function EditarProductoPage() {
     nombre: "",
     precio: "",
     cantidad: "",
+    precioEditable: false, // ✅ boolean por defecto
     gravado: "10",
   });
+
+
 
   const [error, setError] = useState("");
   const [cargando, setCargando] = useState(true);
@@ -38,8 +41,15 @@ export default function EditarProductoPage() {
 
   const handleChange = (e) => {
     const { name, value } = e.target;
+
+    if (name === "precioEditable") {
+      setProducto({ ...producto, [name]: value === "true" });
+      return;
+    }
+
     setProducto({ ...producto, [name]: value });
   };
+
 
   const validarCampos = () => {
     if (!producto.nombre || !producto.precio || !producto.cantidad) {
@@ -128,6 +138,23 @@ export default function EditarProductoPage() {
                 required
               />
             </div>
+
+
+            <div className="mb-3">
+              <label className="form-label">Editable (precio)</label>
+              <select
+                className="form-select"
+                name="precioEditable"
+                value={String(producto.precioEditable ?? false)}
+                onChange={handleChange}
+                required
+              >
+                <option value="false">No</option>
+                <option value="true">Si</option>
+              </select>
+            </div>
+
+
 
             <div className="mb-3">
               <label className="form-label">Gravado</label>

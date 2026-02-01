@@ -6,21 +6,32 @@ import axios from "axios";
 
 export default function NuevoProductoPage() {
   const router = useRouter();
-  const [producto, setProducto] = useState({
+    const [producto, setProducto] = useState({
     codigoBarra: "",
     nombre: "",
     precio: "",
     cantidad: "",
+    precioEditable: false, // ✅ boolean: false = NO
     gravado: "", // Ahora está vacío por defecto
   });
+
+
 
   const [error, setError] = useState("");
 
   // Manejar cambios en los campos
   const handleChange = (e) => {
     const { name, value } = e.target;
+
+    // ✅ Convertimos el select a boolean
+    if (name === "precioEditable") {
+      setProducto({ ...producto, [name]: value === "true" });
+      return;
+    }
+
     setProducto({ ...producto, [name]: value });
   };
+
 
   // Validar campos obligatorios
   const validarCampos = () => {
@@ -127,6 +138,23 @@ export default function NuevoProductoPage() {
                 required
               />
             </div>
+
+
+            <div className="mb-3">
+              <label className="form-label">Editable (precio)</label>
+              <select
+                className="form-select"
+                name="precioEditable"
+                value={String(producto.precioEditable)} 
+                onChange={handleChange}
+                required
+              >
+                <option value="false">No</option>
+                <option value="true">Si</option>
+              </select>
+            </div>
+
+
 
             <div className="mb-3">
               <label className="form-label">Gravado</label>
