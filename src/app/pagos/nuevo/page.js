@@ -134,17 +134,31 @@ export default function NuevoPagoPage() {
         const pendientes = await pendRes.json();
         const lista = Array.isArray(pendientes) ? pendientes : [];
 
+
+
+
         setFacturas(lista);
 
         // ✅ Seleccionar por defecto SOLO la factura actual (checkbox marcado)
         if (facturaIdFocus) {
           setSeleccionadas({ [facturaIdFocus]: true });
+
+          // ✅ Autocompletar "Pago total" con el saldo de la factura foco
+          const facFoco = lista.find((f) => Number(f.id) === Number(facturaIdFocus));
+          const saldoFoco = Number(facFoco?.saldo || 0);
+          const saldoFmt = saldoFoco > 0 ? formatearMilesPY(String(saldoFoco)) : "";
+
+          setPagos({ [facturaIdFocus]: saldoFmt });
         } else {
           setSeleccionadas({});
+          setPagos({});
         }
 
-        // ✅ Pago total debe empezar vacío
-        setPagos({});
+
+
+
+
+
       } catch (err) {
         console.error("AutoCarga error:", err);
         setErrorMsg(err?.message || "Error cargando datos desde la factura.");
@@ -396,7 +410,7 @@ export default function NuevoPagoPage() {
                     <label className="form-label fw-bold mb-1">Nº Pago</label>
                   </div>
                   <div className="col">
-                    <input type="text" className="form-control form-control-sm text-center" value="1000000000" disabled readOnly />
+                    <input type="text" className="form-control form-control-sm text-center" value="" disabled readOnly />
                   </div>
                 </div>
               </div>
@@ -519,11 +533,24 @@ export default function NuevoPagoPage() {
                                     type="checkbox"
                                     className="form-check-input"
                                     checked={!!seleccionadas[id]}
+
+
                                     onChange={(e) => {
                                       const checked = e.target.checked;
+
                                       setSeleccionadas((prev) => ({ ...prev, [id]: checked }));
 
-                                      if (!checked) {
+                                      if (checked) {
+                                        // ✅ Autocompletar con el saldo al marcar (pero permite editar luego)
+                                        setPagos((prev) => {
+                                          // si ya había un monto, lo respetamos
+                                          if (prev[id] != null && String(prev[id]).trim() !== "") return prev;
+
+                                          const saldoFmt = saldo > 0 ? formatearMilesPY(String(saldo)) : "";
+                                          return { ...prev, [id]: saldoFmt };
+                                        });
+                                      } else {
+                                        // ✅ al desmarcar, borramos el pago de esa factura
                                         setPagos((prev) => {
                                           const copy = { ...prev };
                                           delete copy[id];
@@ -531,10 +558,34 @@ export default function NuevoPagoPage() {
                                         });
                                       }
                                     }}
+
+
+
                                   />
                                 </td>
 
-                                <td>{factura.numeroFactura || factura.id}</td>
+                                
+
+                                <td>
+                                  {factura.numeroFactura ? (
+                                    <a
+                                      href={`/facturas/editar/${factura.id}`}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="text-decoration-underline"
+                                      title="Abrir factura en nueva pestaña"
+                                    >
+                                      {factura.numeroFactura}
+                                    </a>
+                                  ) : (
+                                    ""
+                                  )}
+                                </td>
+
+
+
+
+
                                 <td>{factura.fechaEmision}</td>
                                 <td>{Number(factura.total || 0).toLocaleString("es-PY")}</td>
                                 <td>{saldo.toLocaleString("es-PY")}</td>
@@ -546,13 +597,18 @@ export default function NuevoPagoPage() {
                                     className="form-control form-control-sm text-end"
                                     value={pagos[id] ?? ""}
                                     disabled={!seleccionadas[id]}
+
+
                                     onFocus={(e) => {
-                                      setPagos((prev) => ({ ...prev, [id]: "" }));
                                       setTimeout(() => e.target.select(), 0);
                                     }}
+
+
+
                                     onChange={(e) => {
                                       const raw = e.target.value;
 
+                                      // permitir borrar
                                       if (raw.trim() === "") {
                                         setPagos((prev) => {
                                           const copy = { ...prev };
@@ -564,13 +620,22 @@ export default function NuevoPagoPage() {
 
                                       const digits = soloDigitos(raw);
                                       const formatted = formatearMilesPY(digits);
-
                                       const num = aNumero(formatted);
-                                      const finalNum = num > saldo ? saldo : num;
-                                      const finalFormatted = finalNum > 0 ? formatearMilesPY(String(finalNum)) : "";
 
-                                      setPagos((prev) => ({ ...prev, [id]: finalFormatted }));
+                                      // ✅ No permitir superar saldo, pero SIN “autocompletar” al saldo
+                                      if (num > saldo) {
+                                        // no actualiza -> se queda con el último valor válido
+                                        return;
+                                      }
+
+                                      setPagos((prev) => ({ ...prev, [id]: formatted }));
                                     }}
+
+
+
+
+
+                                    
                                     placeholder="0"
                                   />
                                 </td>

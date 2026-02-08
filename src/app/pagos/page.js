@@ -39,11 +39,21 @@ export default function PagosPage() {
     setCurrentPage(newPage);
   };
 
-  const columnas = [
-    { header: "Nº de pago", accessor: "nPago" },
-    { header: "Pago total", accessor: (p) => `${p.totalPagado.toLocaleString("es-PY")} Gs` },
-    { header: "Fecha de creación", accessor: (p) => new Date(p.creadoEn).toLocaleString("es-PY") },
-  ];
+    const columnas = [
+      { header: "Nº de pago", accessor: "nPago" },
+      { header: "Pago total", accessor: (p) => `${p.totalPagado.toLocaleString("es-PY")} Gs` },
+      { header: "Fecha de creación", accessor: (p) => new Date(p.creadoEn).toLocaleString("es-PY") },
+      { 
+        header: "Estado",
+        accessor: (p) => (
+          <span className={`badge ${p.estado === "ANULADO" ? "bg-danger" : "bg-success"}`}>
+            {p.estado}
+          </span>
+        )
+      }, // ACTIVO / ANULADO
+    ];
+
+
 
   return (
     <div className="container mt-5">

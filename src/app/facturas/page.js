@@ -17,7 +17,7 @@ export default function FacturaSearchPage() {
     const fetchFacturas = async () => {
       try {
         const response = await axios.get("http://localhost:8080/api/facturas", {
-          params: { query, page: currentPage, size: pageSize, sort: "fechaEmision,desc", },
+          params: { query, page: currentPage, size: pageSize, sort: "creadoEn,desc" },
         });
 
         setFacturas(response.data.content);
